@@ -1,0 +1,1796 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import {
+  ArrowDownToLine,
+  ArrowRight,
+  ArrowUpRight,
+  AudioLines,
+  Check,
+  CheckCheck,
+  CheckCircle2,
+  ChevronDown,
+  CircleHelp,
+  Disc3,
+  ExternalLink,
+  FileMusic,
+  Headphones,
+  History,
+  Info,
+  Link2,
+  ListMusic,
+  LoaderCircle,
+  LockKeyhole,
+  Menu,
+  Music2,
+  Pause,
+  Plus,
+  Search,
+  Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Unplug,
+  X,
+} from "lucide-react";
+import { demoMatch, demoPlaylist } from "@/lib/demo";
+import {
+  applyAiReview,
+  matchesToCsv,
+  needsAiReview,
+  parsePlaylistId,
+} from "@/lib/matching";
+import type {
+  AiReview,
+  AiStatus,
+  AuthStatus,
+  Candidate,
+  Match,
+  Playlist,
+} from "@/lib/types";
+import type { TransferResult } from "@/lib/spotify";
+
+type Tab = "all" | Match["status"];
+type Saved = {
+  playlist: Playlist;
+  matches: Match[];
+  demo: boolean;
+  name: string;
+  result: TransferResult | null;
+  writeStarted: boolean;
+};
+const initialAuth: AuthStatus = {
+  configured: false,
+  connected: false,
+  redirectUri: "http://127.0.0.1:3002/api/auth/callback",
+};
+const labels = {
+  pending: "等待匹配",
+  matched: "已匹配",
+  review: "待确认",
+  missing: "未找到",
+};
+const SESSION_KEY = "songshift-workspace-v1";
+
+class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public retryAfter?: number,
+  ) {
+    super(message);
+  }
+}
+async function api<T>(
+  url: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const response = await fetch(url, {
+    method: body === undefined ? "GET" : "POST",
+    headers:
+      body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
+  });
+  const data = await response.json();
+  if (!response.ok)
+    throw new ApiError(
+      data.error || "请求失败，请重试。",
+      response.status,
+      data.retryAfter,
+    );
+  return data;
+}
+function SpotifyMark({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="12" />
+      <g fill="none" stroke="var(--spotify-line, white)" strokeLinecap="round">
+        <path d="M5.5 8.5c4.3-1.3 9.2-.9 13 1.4" strokeWidth="1.8" />
+        <path d="M6.3 12c3.8-1 7.9-.6 11.1 1.1" strokeWidth="1.6" />
+        <path d="M7.1 15.3c3.2-.7 6.3-.3 9.2 1" strokeWidth="1.4" />
+      </g>
+    </svg>
+  );
+}
+function NeteaseMark() {
+  return (
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path
+        d="M19.5 5.5c-6.4-1.1-12 3.9-12 10.6 0 5.9 4.1 10.1 9.4 10.1 5.5 0 9.2-3.9 9.2-8.9 0-4.6-3.2-7.7-7-7.7-3.5 0-5.9 2.3-5.9 5.4 0 2.4 1.6 3.9 3.5 3.9 1.8 0 3.2-1.2 3.2-3.1V3.7"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function Cover({
+  name,
+  index = 0,
+  url,
+  large = false,
+}: {
+  name: string;
+  index?: number;
+  url?: string;
+  large?: boolean;
+}) {
+  return (
+    <div className={`cover cover-${index % 7} ${large ? "cover-large" : ""}`}>
+      {/* Remote cover URLs come from the two music services; native images also tolerate unavailable artwork. */}
+      {url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={url}
+          alt={`${name}封面`}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+      ) : (
+        <>
+          <span className="cover-orbit" />
+          <span className="cover-letter">
+            {large ? "SLOW\nDAYS" : name.slice(0, 1)}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    ref.current?.showModal();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="modal"
+      onCancel={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-heading">
+        <h2>{title}</h2>
+        <button className="icon-button" aria-label="关闭弹窗" onClick={onClose}>
+          <X size={20} />
+        </button>
+      </div>
+      {children}
+    </dialog>
+  );
+}
+
+export default function TransferApp() {
+  const [auth, setAuth] = useState<AuthStatus>(initialAuth);
+  const [authReady, setAuthReady] = useState(false);
+  const [ai, setAi] = useState<AiStatus>({
+    configured: false,
+    model: "gpt-5.6-luna",
+  });
+  const [input, setInput] = useState("");
+  const [playlist, setPlaylist] = useState<Playlist | null>(null);
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [demo, setDemo] = useState(false);
+  const [name, setName] = useState("");
+  const [isPublic, setIsPublic] = useState(false);
+  const [busy, setBusy] = useState<"read" | "match" | "transfer" | "ai" | null>(
+    null,
+  );
+  const [tab, setTab] = useState<Tab>("all");
+  const [query, setQuery] = useState("");
+  const [visibleCount, setVisibleCount] = useState(50);
+  const [message, setMessage] = useState<{
+    kind: "error" | "info" | "success";
+    text: string;
+  } | null>(null);
+  const [modal, setModal] = useState<
+    "settings" | "help" | "confirm" | "history" | null
+  >(null);
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [result, setResult] = useState<TransferResult | null>(null);
+  const [writeStarted, setWriteStarted] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const stop = useRef(false);
+  const controller = useRef<AbortController | null>(null);
+  const working = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<AuthStatus>("/api/auth/status")
+      .then(setAuth)
+      .catch(() =>
+        setMessage({
+          kind: "error",
+          text: "无法读取连接状态，请刷新页面重试。",
+        }),
+      )
+      .finally(() => setAuthReady(true));
+    api<AiStatus>("/api/ai/status")
+      .then(setAi)
+      .catch(() => {});
+    queueMicrotask(() => {
+      if (cancelled) return;
+      try {
+        const saved = sessionStorage.getItem(SESSION_KEY);
+        if (saved) {
+          const data: Saved = JSON.parse(saved);
+          if (data.playlist && Array.isArray(data.matches)) {
+            setPlaylist(data.playlist);
+            setMatches(data.matches);
+            setDemo(data.demo);
+            setName(data.name);
+            setResult(data.result);
+            setWriteStarted(!!data.writeStarted);
+          }
+        }
+      } catch {
+        /* An unavailable browser store does not prevent using the app. */
+      }
+      const authResult = new URLSearchParams(window.location.search).get(
+        "auth",
+      );
+      if (authResult) {
+        const errors: Record<string, string> = {
+          configuration: "请先完成 Spotify 应用配置。",
+          invalid_state: "授权请求已过期或校验失败，请重新连接 Spotify。",
+          denied: "你取消了授权，可以随时重新连接。",
+          failed: "授权未完成，请检查 Client ID 和回调地址后重试。",
+        };
+        setMessage({
+          kind: authResult === "success" ? "success" : "error",
+          text:
+            authResult === "success"
+              ? "Spotify 已连接，可以开始匹配歌单了。"
+              : errors[authResult] || "授权失败，请重试。",
+        });
+        window.history.replaceState({}, "", "/");
+      }
+      setHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+      stop.current = true;
+      controller.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      if (playlist)
+        sessionStorage.setItem(
+          SESSION_KEY,
+          JSON.stringify({
+            playlist,
+            matches,
+            demo,
+            name,
+            result,
+            writeStarted,
+          } satisfies Saved),
+        );
+      else sessionStorage.removeItem(SESSION_KEY);
+    } catch {
+      /* Large playlists can exceed browser storage; the current tab remains usable. */
+    }
+  }, [hydrated, playlist, matches, demo, name, result, writeStarted]);
+
+  const completed = matches.filter((m) => m.status !== "pending").length;
+  const selected = matches.filter((m) => m.included && m.selected);
+  const counts = {
+    all: matches.length,
+    matched: matches.filter((m) => m.status === "matched").length,
+    review: matches.filter((m) => m.status === "review").length,
+    missing: matches.filter((m) => m.status === "missing").length,
+    pending: matches.filter((m) => m.status === "pending").length,
+  };
+  const filtered = matches.filter(
+    (m) =>
+      (tab === "all" || m.status === tab) &&
+      `${m.source.name} ${m.source.artists.join(" ")} ${m.selected?.name || ""}`
+        .toLocaleLowerCase()
+        .includes(query.toLocaleLowerCase()),
+  );
+  const review = matches.find((m) => m.source.id === reviewId);
+  const aiPending = matches.filter(needsAiReview);
+  const progress = matches.length
+    ? Math.round((completed / matches.length) * 100)
+    : 0;
+
+  function loadPlaylist(data: Playlist, isDemo: boolean) {
+    setPlaylist(data);
+    setDemo(isDemo);
+    setName(data.name);
+    setMatches(
+      data.songs.map((source) => ({
+        source,
+        candidates: [],
+        selected: null,
+        status: "pending",
+        included: false,
+      })),
+    );
+    setResult(null);
+    setWriteStarted(false);
+    setTab("all");
+    setQuery("");
+    setVisibleCount(50);
+    setRetryAt(0);
+  }
+  function errorMessage(error: unknown) {
+    if (error instanceof ApiError && error.status === 401)
+      setAuth((old) => ({ ...old, connected: false }));
+    if (error instanceof ApiError && error.retryAfter)
+      setRetryAt(Date.now() + error.retryAfter * 1000);
+    setMessage({
+      kind: "error",
+      text: error instanceof Error ? error.message : "操作未完成，请重试。",
+    });
+  }
+  async function readPlaylist() {
+    if (working.current) return;
+    if (!parsePlaylistId(input)) {
+      setMessage({
+        kind: "error",
+        text: "请输入有效的网易云歌单链接或数字 ID。短链接请先打开，再复制完整歌单地址。",
+      });
+      return;
+    }
+    working.current = true;
+    setBusy("read");
+    setMessage(null);
+    try {
+      const data = await api<Playlist>("/api/netease/playlist", { input });
+      loadPlaylist(data, false);
+      if (!data.songs.length)
+        setMessage({
+          kind: "info",
+          text: "这个歌单没有可读取的歌曲。请试试其他公开歌单。",
+        });
+    } catch (error) {
+      errorMessage(error);
+    } finally {
+      working.current = false;
+      setBusy(null);
+    }
+  }
+  function openDemo() {
+    if (working.current) return;
+    loadPlaylist(demoPlaylist, true);
+    setMessage({
+      kind: "info",
+      text: "正在体验示例歌单。匹配结果为演示数据，不会读写你的 Spotify 账号。",
+    });
+  }
+  function connect() {
+    if (!auth.configured) {
+      setModal("settings");
+      return;
+    }
+    window.location.assign(
+      new URL("/api/auth/login", window.location.origin).href,
+    );
+  }
+  async function matchPlaylist() {
+    if (working.current || !playlist) return;
+    if (!demo && !auth.connected) {
+      connect();
+      return;
+    }
+    if (Date.now() < retryAt) {
+      setMessage({
+        kind: "info",
+        text: `Spotify 仍在限流中，请约 ${Math.ceil((retryAt - Date.now()) / 1000)} 秒后继续。`,
+      });
+      return;
+    }
+    working.current = true;
+    stop.current = false;
+    setBusy("match");
+    setMessage(null);
+    controller.current = new AbortController();
+    try {
+      for (let index = 0; index < matches.length; index++) {
+        if (stop.current) break;
+        if (matches[index].status !== "pending") continue;
+        let match: Match;
+        if (demo) {
+          await new Promise((resolve) => setTimeout(resolve, 240));
+          match = demoMatch(matches[index].source, index);
+        } else
+          match = await api<Match>(
+            "/api/spotify/match",
+            { song: matches[index].source },
+            controller.current.signal,
+          );
+        if (stop.current) break;
+        setMatches((old) =>
+          old.map((item, i) =>
+            i === index ? { ...match, source: item.source } : item,
+          ),
+        );
+      }
+    } catch (error) {
+      if (!stop.current) errorMessage(error);
+    } finally {
+      working.current = false;
+      setBusy(null);
+      controller.current = null;
+    }
+  }
+  function pauseMatching() {
+    stop.current = true;
+    controller.current?.abort();
+    setMessage({
+      kind: "info",
+      text: "匹配已暂停，已完成的结果会保留。点击继续匹配即可接着处理。",
+    });
+  }
+  function chooseCandidate(candidate: Candidate) {
+    setMatches((old) =>
+      old.map((m) =>
+        m.source.id === reviewId
+          ? {
+              ...m,
+              selected: candidate,
+              included: true,
+              status: "matched",
+              confirmedByUser: true,
+            }
+          : m,
+      ),
+    );
+    setReviewId(null);
+  }
+  async function runAiReview(items: Match[]) {
+    if (working.current || writeStarted || !items.length) return;
+    if (!demo && !ai.configured) {
+      setModal("settings");
+      setReviewId(null);
+      return;
+    }
+    working.current = true;
+    setBusy("ai");
+    setMessage(null);
+    stop.current = false;
+    controller.current = new AbortController();
+    try {
+      for (const match of items) {
+        if (stop.current) break;
+        let advice: AiReview;
+        if (demo) {
+          await new Promise((resolve) => setTimeout(resolve, 650));
+          advice = {
+            decision: match.selected?.confident ? "match" : "skip",
+            candidateId: match.selected?.confident ? match.selected.id : null,
+            confidence: "high",
+            reason: match.selected?.confident
+              ? "示例建议：歌名、歌手和时长一致，可保留此候选。"
+              : "示例建议：候选标注 Live，且比原曲长 28 秒，可能是不同的现场录音。建议跳过，或人工确认后再选择。",
+            model: `${ai.model} · 模拟结果`,
+          };
+        } else
+          advice = await api<AiReview>(
+            "/api/ai/review",
+            { source: match.source, candidates: match.candidates },
+            controller.current.signal,
+          );
+        if (stop.current) break;
+        setMatches((old) =>
+          old.map((m) =>
+            m.source.id === match.source.id ? applyAiReview(m, advice) : m,
+          ),
+        );
+      }
+    } catch (error) {
+      if (!stop.current) errorMessage(error);
+    } finally {
+      working.current = false;
+      setBusy(null);
+      controller.current = null;
+    }
+  }
+  function exportCsv(subset: Match[] = matches) {
+    const url = URL.createObjectURL(
+      new Blob([matchesToCsv(subset)], { type: "text/csv;charset=utf-8;" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${demo ? "示例-" : ""}${name || "歌单"}-匹配报告.csv`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function transfer() {
+    if (working.current || writeStarted || !selected.length || !name.trim())
+      return;
+    setModal(null);
+    working.current = true;
+    setBusy("transfer");
+    setMessage(null);
+    if (demo) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setResult({
+        id: "demo",
+        url: "",
+        added: selected.length,
+        total: selected.length,
+        complete: true,
+      });
+      setWriteStarted(true);
+      working.current = false;
+      setBusy(null);
+      return;
+    }
+    setWriteStarted(true);
+    try {
+      // Persist before the write so a reload cannot quietly create a second playlist.
+      sessionStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({
+          playlist,
+          matches,
+          demo,
+          name,
+          result: null,
+          writeStarted: true,
+        }),
+      );
+    } catch {
+      /* Storage is optional. */
+    }
+    try {
+      const data = await api<TransferResult>("/api/spotify/transfer", {
+        name,
+        isPublic,
+        uris: selected.map((m) => m.selected!.uri),
+      });
+      setResult(data);
+      if (data.error) setMessage({ kind: "error", text: data.error });
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        [400, 401, 403, 415, 429].includes(error.status)
+      )
+        setWriteStarted(false);
+      errorMessage(error);
+    } finally {
+      working.current = false;
+      setBusy(null);
+    }
+  }
+  async function disconnect() {
+    try {
+      await api("/api/auth/logout", {});
+      setAuth((old) => ({ ...old, connected: false }));
+      setMessage({ kind: "info", text: "Spotify 已断开连接。" });
+      setModal(null);
+    } catch (error) {
+      errorMessage(error);
+    }
+  }
+  function reset() {
+    if (working.current) return;
+    setPlaylist(null);
+    setMatches([]);
+    setResult(null);
+    setWriteStarted(false);
+    setDemo(false);
+    setMessage(null);
+    setMobileNav(false);
+    setInput("");
+    setName("");
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
+        <Link className="brand" href="/" aria-label="SongShift 首页">
+          <span className="brand-icon">
+            <AudioLines size={23} />
+          </span>
+          <span>
+            SongShift<span className="brand-cn">移调</span>
+          </span>
+        </Link>
+        <div className="workspace-label">YOUR MUSIC, EVERYWHERE</div>
+        <nav aria-label="主要导航">
+          <button
+            className="nav-item active"
+            onClick={() => {
+              setMobileNav(false);
+              document
+                .getElementById("transfer")
+                ?.scrollIntoView({ behavior: "smooth" });
+            }}
+          >
+            <AudioLines size={19} />
+            歌单迁移
+            <ArrowUpRight size={15} />
+          </button>
+          <button
+            className="nav-item"
+            onClick={() => {
+              setModal("history");
+              setMobileNav(false);
+            }}
+          >
+            <History size={19} />
+            本次迁移
+          </button>
+          <button
+            className="nav-item"
+            onClick={() => {
+              setModal("settings");
+              setMobileNav(false);
+            }}
+          >
+            <SlidersHorizontal size={19} />
+            连接与设置
+          </button>
+        </nav>
+        <div className="sidebar-note">
+          <span className="mini-disc">
+            <Disc3 size={30} />
+          </span>
+          <p>
+            平台会变，
+            <br />
+            喜欢的音乐不会。
+          </p>
+          <span>Keep your music close.</span>
+          <div className="note-lines">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
+        </div>
+        <div className="sidebar-bottom">
+          <button className="nav-item" onClick={() => setModal("help")}>
+            <CircleHelp size={18} />
+            使用指南
+            <ArrowUpRight size={14} />
+          </button>
+          <div className="local-status">
+            <span />
+            你的音乐，由你做主 <span className="version">v1.0</span>
+          </div>
+        </div>
+      </aside>
+
+      <div className="main-shell">
+        <header className="topbar">
+          <div className="breadcrumb">
+            <button
+              className="icon-button mobile-menu"
+              aria-label="打开导航"
+              onClick={() => setMobileNav(!mobileNav)}
+            >
+              <Menu size={20} />
+            </button>
+            <span>工作台</span>
+            <span className="breadcrumb-slash">/</span>
+            <strong>歌单迁移</strong>
+          </div>
+          <div className="topbar-right">
+            <span className="private-label">
+              <ShieldCheck size={14} />
+              安全连接，安心迁移
+            </span>
+            <button
+              className="help-button"
+              aria-label="使用帮助"
+              onClick={() => setModal("help")}
+            >
+              <CircleHelp size={19} />
+            </button>
+          </div>
+        </header>
+        <main id="transfer">
+          <section className="hero">
+            <div className="hero-copy">
+              <div className="eyebrow">
+                <span /> A NEW HOME FOR YOUR MUSIC
+              </div>
+              <h1>
+                换个地方，
+                <br />
+                继续<span>喜欢。</span>
+                <svg
+                  className="title-swoosh"
+                  viewBox="0 0 150 13"
+                  aria-hidden="true"
+                >
+                  <path d="M3 9C47 1 105 1 146 6" />
+                </svg>
+              </h1>
+              <p>
+                把网易云的心动，带到 Spotify。
+                <br />
+                歌单轻松迁移，让熟悉的旋律继续陪伴。
+              </p>
+              <div className="hero-tags">
+                <span>
+                  <Check size={13} />
+                  保留歌曲顺序
+                </span>
+                <span>
+                  <Check size={13} />
+                  逐首智能匹配
+                </span>
+                <span>
+                  <Check size={13} />
+                  自主确认版本
+                </span>
+              </div>
+            </div>
+            <div className="hero-art" aria-hidden="true">
+              <div className="art-orbit orbit-one" />
+              <div className="art-orbit orbit-two" />
+              <div className="art-star star-one">✳</div>
+              <div className="art-star star-two">✦</div>
+              <div className="record-sleeve">
+                <span>
+                  GOOD MUSIC
+                  <br />
+                  GOES WITH YOU.
+                </span>
+                <div className="sleeve-landscape">
+                  <i />
+                  <b />
+                </div>
+                <span className="sleeve-bottom">SIDE A — YOUR FAVORITES</span>
+              </div>
+              <div className="vinyl">
+                <div className="vinyl-label">
+                  <AudioLines size={28} />
+                  <span>keep it playing</span>
+                  <i />
+                </div>
+              </div>
+              <div className="floating-service netease-float">
+                <NeteaseMark />
+              </div>
+              <div className="floating-service spotify-float">
+                <SpotifyMark />
+              </div>
+              <div className="art-caption">
+                <span>网易云音乐</span>
+                <span className="art-arrow">
+                  · · · <ArrowRight size={17} /> · · ·
+                </span>
+                <span>Spotify</span>
+              </div>
+            </div>
+          </section>
+
+          <ol className="steps" aria-label="迁移步骤">
+            {["选择歌单", "匹配与确认", "迁移到 Spotify"].map((label, i) => {
+              const activeStep = result
+                ? 3
+                : completed === matches.length && matches.length > 0
+                  ? 2
+                  : playlist
+                    ? 1
+                    : 0;
+              return (
+                <li
+                  key={label}
+                  className={
+                    i < activeStep ? "done" : i === activeStep ? "current" : ""
+                  }
+                >
+                  <span className="step-number">
+                    {i < activeStep ? <Check size={14} /> : `0${i + 1}`}
+                  </span>
+                  <span>{label}</span>
+                  {i < 2 && <div className="step-line" />}
+                </li>
+              );
+            })}
+          </ol>
+
+          {message && (
+            <div
+              className={`notice ${message.kind}`}
+              role={message.kind === "error" ? "alert" : "status"}
+            >
+              <Info size={17} />
+              <span>{message.text}</span>
+              <button
+                className="icon-button"
+                aria-label="关闭提示"
+                onClick={() => setMessage(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+
+          <section className="connection-grid" aria-label="选择来源和目标">
+            <div className="service-card source-card">
+              <div className="card-topline">
+                <span className="section-kicker">FROM / 音乐来源</span>
+                <span className="soft-badge">公开歌单 · 免登录</span>
+              </div>
+              <div className="service-title">
+                <span className="service-logo netease">
+                  <NeteaseMark />
+                </span>
+                <div>
+                  <h2>网易云音乐</h2>
+                  <p>那些陪伴你的旋律</p>
+                </div>
+                <span className="service-index">01</span>
+              </div>
+              <label htmlFor="playlist-input" className="field-label">
+                粘贴歌单链接或 ID
+              </label>
+              <form
+                className="input-with-button"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void readPlaylist();
+                }}
+              >
+                <Link2 size={17} />
+                <input
+                  id="playlist-input"
+                  placeholder="music.163.com/playlist?id=…"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  disabled={!!busy}
+                  autoComplete="off"
+                />
+                <button
+                  className="small-primary"
+                  disabled={!!busy || !input.trim()}
+                  type="submit"
+                >
+                  {busy === "read" ? (
+                    <LoaderCircle className="spin" size={16} />
+                  ) : (
+                    "读取歌单"
+                  )}
+                </button>
+              </form>
+              <div className="source-hint">
+                <span>网易云 → 歌单 → 分享 → 复制链接</span>
+                <button
+                  onClick={() => {
+                    setInput("13586645289");
+                  }}
+                  disabled={!!busy}
+                >
+                  填入你的歌单
+                  <ArrowUpRight size={12} />
+                </button>
+              </div>
+            </div>
+            <div className="connection-arrow">
+              <ArrowRight size={19} />
+            </div>
+            <div className="service-card destination-card">
+              <div className="card-topline">
+                <span className="section-kicker">TO / 新的目的地</span>
+                <span
+                  className={`connection-status ${auth.connected ? "connected" : ""}`}
+                >
+                  <i />
+                  {auth.connected ? "已连接" : "未连接"}
+                </span>
+              </div>
+              <div className="service-title">
+                <span className="service-logo spotify">
+                  <SpotifyMark />
+                </span>
+                <div>
+                  <h2>Spotify</h2>
+                  <p>让喜欢，在这里继续</p>
+                </div>
+                <span className="service-index">02</span>
+              </div>
+              <button
+                className={`spotify-connect ${auth.connected ? "is-connected" : ""}`}
+                onClick={() =>
+                  auth.connected ? setModal("settings") : connect()
+                }
+                disabled={!authReady || !!busy}
+              >
+                {auth.connected ? <CheckCircle2 size={17} /> : <SpotifyMark />}
+                {!authReady
+                  ? "正在检查连接…"
+                  : auth.connected
+                    ? "Spotify 已连接"
+                    : "连接 Spotify 账号"}
+                <ArrowUpRight size={16} />
+              </button>
+              <p className="connect-note">
+                <LockKeyhole size={12} />
+                通过 Spotify 官方授权，无需提供密码
+              </p>
+            </div>
+          </section>
+
+          {!playlist ? (
+            <section className="empty-panel">
+              <div className="empty-panel-illustration">
+                <span />
+                <div>
+                  <ListMusic size={27} />
+                </div>
+                <i>
+                  <Plus size={12} />
+                </i>
+              </div>
+              <h2>你的下一段音乐旅程，从这里开始</h2>
+              <p>在上方粘贴歌单链接，我们会帮你找到每首歌的新位置。</p>
+              <button
+                className="demo-button"
+                onClick={openDemo}
+                disabled={!!busy}
+              >
+                先用示例歌单体验一下
+                <ArrowRight size={15} />
+              </button>
+              <div className="empty-panel-footer">
+                <span>
+                  <FileMusic size={14} />
+                  仅迁移歌曲信息
+                </span>
+                <i />
+                <span>
+                  <ShieldCheck size={14} />
+                  不修改原始歌单
+                </span>
+                <i />
+                <span>
+                  <ArrowDownToLine size={14} />
+                  支持导出匹配报告
+                </span>
+              </div>
+            </section>
+          ) : (
+            <>
+              <section className="playlist-panel">
+                <div className="playlist-summary">
+                  <Cover name={playlist.name} url={playlist.cover} large />
+                  <div className="playlist-meta">
+                    <div className="playlist-eyebrow">
+                      {demo ? "示例歌单 · 演示模式" : "已读取网易云歌单"}
+                      <span>PLAYLIST</span>
+                    </div>
+                    <h2>{playlist.name}</h2>
+                    <p>
+                      {playlist.creator}
+                      <span>·</span>
+                      {playlist.songs.length.toLocaleString()} 首歌曲
+                      <span>·</span>
+                      {Math.round(
+                        playlist.songs.reduce(
+                          (sum, song) => sum + song.durationMs,
+                          0,
+                        ) / 60000,
+                      )}{" "}
+                      分钟
+                    </p>
+                  </div>
+                  <button
+                    className="text-button"
+                    onClick={reset}
+                    disabled={!!busy}
+                  >
+                    <Plus size={15} />
+                    更换歌单
+                  </button>
+                </div>
+                {playlist.missing > 0 && (
+                  <div className="inline-warning">
+                    <Info size={15} />
+                    网易云显示 {playlist.total} 首，其中 {playlist.missing}{" "}
+                    首暂时无法读取；下面列出全部可读取歌曲。
+                  </div>
+                )}
+                <div className="matching-controls">
+                  <div>
+                    <h3>
+                      {busy === "match"
+                        ? "正在寻找熟悉的旋律…"
+                        : completed === matches.length && matches.length
+                          ? "匹配完成，每一首都由你决定"
+                          : completed
+                            ? "进度已保存，随时继续"
+                            : "准备好，为歌单找一个新家"}
+                    </h3>
+                    <p>
+                      {completed
+                        ? `已处理 ${completed} / ${matches.length} 首 · 已选择 ${selected.length} 首迁移`
+                        : "综合歌名、歌手、专辑与时长，寻找合适的版本。"}
+                    </p>
+                  </div>
+                  {busy === "match" ? (
+                    <button
+                      className="secondary-button"
+                      onClick={pauseMatching}
+                    >
+                      <Pause size={14} />
+                      暂停匹配
+                    </button>
+                  ) : (
+                    completed < matches.length && (
+                      <button
+                        className="primary-button"
+                        disabled={!!busy || writeStarted}
+                        onClick={matchPlaylist}
+                      >
+                        <Sparkles size={15} />
+                        {completed
+                          ? "继续匹配"
+                          : demo
+                            ? "体验智能匹配"
+                            : "开始智能匹配"}
+                      </button>
+                    )
+                  )}
+                </div>
+                {(completed > 0 || busy === "match") && (
+                  <div
+                    className="progress-track"
+                    role="progressbar"
+                    aria-label="匹配进度"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={progress}
+                  >
+                    <span style={{ width: `${progress}%` }} />
+                  </div>
+                )}
+                {completed > 0 && (
+                  <div className="ai-review-bar">
+                    <div className="ai-bar-icon">
+                      <Sparkles size={18} />
+                    </div>
+                    <div>
+                      <h3>
+                        多一双耳朵，少一点不确定<span>AI 复核</span>
+                      </h3>
+                      <p>
+                        {busy === "ai"
+                          ? "正在核对歌曲元数据，已完成的建议会保留…"
+                          : aiPending.length
+                            ? `${aiPending.length} 首歌曲值得再检查一下 · ${demo ? "演示模式" : ai.model}`
+                            : `已复核 ${matches.filter((m) => m.aiReview).length} 首 · 可在歌曲详情中单独复核`}
+                      </p>
+                    </div>
+                    {busy === "ai" ? (
+                      <button
+                        className="ai-button"
+                        onClick={() => {
+                          stop.current = true;
+                          controller.current?.abort();
+                        }}
+                      >
+                        <Pause size={13} />
+                        暂停复核
+                      </button>
+                    ) : (
+                      <button
+                        className="ai-button"
+                        onClick={() => runAiReview(aiPending)}
+                        disabled={!!busy || writeStarted || !aiPending.length}
+                      >
+                        <Sparkles size={13} />
+                        {demo ? "体验 AI 复核" : "AI 复核疑似歌曲"}
+                      </button>
+                    )}
+                    <span className="ai-data-note">
+                      仅发送待复核歌曲及候选的歌名、歌手、专辑和时长；建议由你最终确认。
+                    </span>
+                  </div>
+                )}
+                <div className="table-toolbar">
+                  <div
+                    className="tabs"
+                    role="tablist"
+                    aria-label="筛选匹配状态"
+                  >
+                    {(["all", "matched", "review", "missing"] as const).map(
+                      (key) => (
+                        <button
+                          key={key}
+                          role="tab"
+                          aria-selected={tab === key}
+                          className={tab === key ? "selected" : ""}
+                          onClick={() => {
+                            setTab(key);
+                            setVisibleCount(50);
+                          }}
+                        >
+                          {key === "all" ? "全部歌曲" : labels[key]}
+                          <span>{counts[key]}</span>
+                        </button>
+                      ),
+                    )}
+                  </div>
+                  <div className="table-tools">
+                    <label className="search-field">
+                      <Search size={15} />
+                      <input
+                        value={query}
+                        placeholder="搜索歌曲"
+                        aria-label="搜索歌曲"
+                        onChange={(event) => {
+                          setQuery(event.target.value);
+                          setVisibleCount(50);
+                        }}
+                      />
+                    </label>
+                    <button
+                      className="icon-button"
+                      title="导出全部匹配报告"
+                      aria-label="导出全部匹配报告"
+                      onClick={() => exportCsv()}
+                      disabled={!matches.length}
+                    >
+                      <ArrowDownToLine size={17} />
+                    </button>
+                  </div>
+                </div>
+                <div className="track-table-wrapper">
+                  <table className="track-table">
+                    <thead>
+                      <tr>
+                        <th className="check-column">
+                          <input
+                            type="checkbox"
+                            aria-label="选择或取消所有已确认歌曲"
+                            checked={
+                              matches.some((m) => m.status === "matched") &&
+                              matches
+                                .filter((m) => m.status === "matched")
+                                .every((m) => m.included)
+                            }
+                            disabled={!!busy || writeStarted || !counts.matched}
+                            onChange={(event) =>
+                              setMatches((old) =>
+                                old.map((m) =>
+                                  m.status === "matched"
+                                    ? { ...m, included: event.target.checked }
+                                    : m,
+                                ),
+                              )
+                            }
+                          />
+                        </th>
+                        <th className="number-column">#</th>
+                        <th>网易云音乐</th>
+                        <th className="arrow-column" />
+                        <th>Spotify 匹配结果</th>
+                        <th>匹配状态</th>
+                        <th className="action-column" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.slice(0, visibleCount).map((match) => {
+                        const index = matches.indexOf(match);
+                        return (
+                          <tr key={match.source.id}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                aria-label={`选择 ${match.source.name}`}
+                                checked={match.included}
+                                disabled={
+                                  !!busy ||
+                                  writeStarted ||
+                                  !match.selected ||
+                                  match.status === "review"
+                                }
+                                onChange={(event) =>
+                                  setMatches((old) =>
+                                    old.map((m) =>
+                                      m.source.id === match.source.id
+                                        ? {
+                                            ...m,
+                                            included: event.target.checked,
+                                          }
+                                        : m,
+                                    ),
+                                  )
+                                }
+                              />
+                            </td>
+                            <td className="track-index">
+                              {String(index + 1).padStart(2, "0")}
+                            </td>
+                            <td>
+                              <div className="track-info">
+                                <Cover
+                                  name={match.source.name}
+                                  index={index}
+                                  url={match.source.cover}
+                                />
+                                <div>
+                                  <strong>{match.source.name}</strong>
+                                  <span>
+                                    {match.source.artists.join(" / ")}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="arrow-column">
+                              <ArrowRight size={14} />
+                            </td>
+                            <td>
+                              {match.selected ? (
+                                <div className="matched-track">
+                                  <strong>
+                                    {match.selected.url ? (
+                                      <a
+                                        href={match.selected.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        {match.selected.name}
+                                        <ArrowUpRight size={11} />
+                                      </a>
+                                    ) : (
+                                      match.selected.name
+                                    )}
+                                  </strong>
+                                  <span>
+                                    {match.selected.artists.join(" / ")}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="no-match">
+                                  {match.status === "pending"
+                                    ? "等待寻找它的新位置"
+                                    : "暂时没有找到合适的版本"}
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span className={`match-status ${match.status}`}>
+                                {match.status === "matched" ? (
+                                  <Check size={12} />
+                                ) : match.status === "review" ? (
+                                  <Info size={12} />
+                                ) : (
+                                  <span className="status-dot" />
+                                )}
+                                {labels[match.status]}
+                              </span>
+                            </td>
+                            <td>
+                              {match.candidates.length > 0 && (
+                                <button
+                                  className="row-action"
+                                  onClick={() => setReviewId(match.source.id)}
+                                  disabled={!!busy || writeStarted}
+                                  aria-label={`查看 ${match.source.name} 的匹配候选`}
+                                >
+                                  <Settings2 size={16} />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {!filtered.length && (
+                    <div className="no-results">
+                      <Search size={22} />
+                      <p>这里还没有歌曲{query ? "，试试其他关键词" : ""}。</p>
+                    </div>
+                  )}
+                </div>
+                {filtered.length > visibleCount && (
+                  <button
+                    className="load-more"
+                    onClick={() => setVisibleCount((count) => count + 50)}
+                  >
+                    显示更多（还有 {filtered.length - visibleCount} 首）
+                    <ChevronDown size={15} />
+                  </button>
+                )}
+                <div className="table-bottom">
+                  <span>
+                    <Info size={13} />
+                    「待确认」的歌曲需手动选择版本后才会迁移
+                  </span>
+                  <button
+                    className="text-button"
+                    onClick={() => exportCsv(filtered)}
+                  >
+                    导出{tab === "all" ? "全部" : labels[tab]}结果
+                    <ArrowDownToLine size={13} />
+                  </button>
+                </div>
+              </section>
+
+              {result ? (
+                <section
+                  className={`result-panel ${result.complete ? "success" : "partial"}`}
+                >
+                  <span className="result-icon">
+                    {result.complete ? (
+                      <CheckCheck size={28} />
+                    ) : (
+                      <Info size={28} />
+                    )}
+                  </span>
+                  <div>
+                    <h2>
+                      {demo
+                        ? "体验完成，下一站换上你的歌单"
+                        : result.complete
+                          ? "迁移完成，喜欢的音乐已经到站"
+                          : "歌单已创建，部分歌曲尚未确认写入"}
+                    </h2>
+                    <p>
+                      {demo
+                        ? `示例中已选择 ${result.added} 首歌曲，没有向 Spotify 写入任何内容。`
+                        : `已确认写入 ${result.added} / ${result.total} 首歌曲。${result.complete ? "去 Spotify 开启新的循环吧。" : "请先检查目标歌单，再处理剩余歌曲。"}`}
+                    </p>
+                  </div>
+                  {result.url ? (
+                    <a
+                      className="primary-button"
+                      href={result.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      在 Spotify 打开
+                      <ExternalLink size={15} />
+                    </a>
+                  ) : (
+                    <button className="primary-button" onClick={reset}>
+                      迁移我的歌单
+                      <ArrowRight size={15} />
+                    </button>
+                  )}
+                </section>
+              ) : (
+                <section className="transfer-footer">
+                  <div className="target-name">
+                    <label htmlFor="target-name">新歌单名称</label>
+                    <input
+                      id="target-name"
+                      value={name}
+                      maxLength={100}
+                      onChange={(event) => setName(event.target.value)}
+                      disabled={!!busy || writeStarted}
+                    />
+                  </div>
+                  <label className="privacy-toggle">
+                    <input
+                      type="checkbox"
+                      checked={isPublic}
+                      onChange={(event) => setIsPublic(event.target.checked)}
+                      disabled={!!busy || writeStarted}
+                    />
+                    <span>公开歌单</span>
+                  </label>
+                  <button
+                    className="primary-button transfer-button"
+                    onClick={() => setModal("confirm")}
+                    disabled={
+                      !!busy ||
+                      writeStarted ||
+                      !selected.length ||
+                      !name.trim() ||
+                      (!demo && !auth.connected)
+                    }
+                  >
+                    {busy === "transfer" ? (
+                      <LoaderCircle size={17} className="spin" />
+                    ) : (
+                      <ArrowRight size={17} />
+                    )}{" "}
+                    {busy === "transfer"
+                      ? "正在迁移，请保持页面打开…"
+                      : `${demo ? "体验迁移" : "迁移到 Spotify"}${selected.length ? ` · ${selected.length} 首` : ""}`}
+                  </button>
+                  {writeStarted && !busy && (
+                    <p className="write-warning">
+                      上次写入结果尚未确认。请先在 Spotify
+                      检查是否已创建歌单，以免重复迁移。
+                    </p>
+                  )}
+                </section>
+              )}
+            </>
+          )}
+
+          <footer className="page-footer">
+            <span>
+              <AudioLines size={14} />
+              让音乐自由流动，让喜欢始终相随。
+            </span>
+            <button onClick={() => setModal("help")}>
+              关于匹配与隐私
+              <ArrowUpRight size={12} />
+            </button>
+          </footer>
+        </main>
+      </div>
+
+      {modal === "settings" && (
+        <Modal title="连接与设置" onClose={() => setModal(null)}>
+          <div className="settings-service">
+            <span className="service-logo spotify">
+              <SpotifyMark />
+            </span>
+            <div>
+              <h3>Spotify 官方授权</h3>
+              <p>
+                {auth.connected
+                  ? "已连接 · 可创建和管理迁移歌单"
+                  : auth.configured
+                    ? "应用已配置，可以连接账号"
+                    : "完成一次应用配置，即可开始迁移"}
+              </p>
+            </div>
+          </div>
+          {!auth.configured && (
+            <div className="setup-instructions">
+              <ol>
+                <li>
+                  在{" "}
+                  <a
+                    href="https://developer.spotify.com/dashboard"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Spotify Developer Dashboard <ExternalLink size={12} />
+                  </a>{" "}
+                  创建应用。
+                </li>
+                <li>
+                  把下面的地址添加到应用的 Redirect URIs：
+                  <code>{auth.redirectUri}</code>
+                </li>
+                <li>
+                  在项目的 <code className="inline-code">.env.local</code>{" "}
+                  中填写：
+                  <pre>{`SPOTIFY_CLIENT_ID=你的 Client ID\nAPP_URL=${auth.redirectUri.replace("/api/auth/callback", "")}\nSESSION_SECRET=至少32位随机字符串`}</pre>
+                </li>
+                <li>
+                  重启服务，然后刷新页面。开发模式的账号资格和用户配额以 Spotify
+                  控制台为准。
+                </li>
+              </ol>
+              <p>
+                <LockKeyhole size={14} />
+                采用 PKCE，不需要 Client Secret。授权令牌通过加密 HttpOnly
+                Cookie 保存。
+              </p>
+            </div>
+          )}
+          {auth.configured && (
+            <button
+              className={auth.connected ? "secondary-button" : "primary-button"}
+              onClick={auth.connected ? disconnect : connect}
+              disabled={!!busy}
+            >
+              {auth.connected ? <Unplug size={16} /> : <SpotifyMark />}
+              {auth.connected ? "断开 Spotify" : "连接 Spotify"}
+            </button>
+          )}
+          <div className="settings-netease">
+            <h3>
+              <Sparkles size={15} /> AI 歌曲复核
+            </h3>
+            <p>
+              {ai.configured
+                ? `已配置 ${ai.model}，通过你的中转站复核疑似歌曲。`
+                : "在 .env.local 中填写中转站配置后，重启服务即可启用。"}
+            </p>
+            <pre className="ai-config">{`AI_BASE_URL=https://api.loe.cx/v1\nAI_API_KEY=你的中转站密钥\nAI_MODEL=gpt-5.6-luna\nAI_API_STYLE=chat_completions`}</pre>
+            <p>
+              兼容 Chat Completions 和 Responses，可通过 AI_API_STYLE
+              切换。模型名填写中转站实际支持的 ID。密钥只留在服务端；AI
+              仅获取你点击复核的歌曲元数据。
+            </p>
+          </div>
+          <div className="settings-netease">
+            <h3>网易云音乐</h3>
+            <p>
+              当前通过公开歌单链接读取，无需登录。尚未查到可供普通开发者直接申请的歌单
+              OAuth 文档；社区扫码登录属于 Cookie 会话方式，本版暂不接入。
+            </p>
+          </div>
+        </Modal>
+      )}
+      {modal === "help" && (
+        <Modal title="带着喜欢的音乐出发" onClose={() => setModal(null)}>
+          <div className="help-steps">
+            <div>
+              <span>01</span>
+              <section>
+                <h3>复制网易云公开歌单链接</h3>
+                <p>
+                  打开歌单，选择分享并复制链接。也可以直接输入歌单数字
+                  ID。私密歌单请先调整公开状态。
+                </p>
+              </section>
+            </div>
+            <div>
+              <span>02</span>
+              <section>
+                <h3>连接 Spotify，逐首匹配</h3>
+                <p>
+                  通过 Spotify
+                  官方页面授权。我们比较歌名、歌手、专辑和时长；不同版本与不确定结果会留给你确认。服务限流时会保留进度，可稍后继续。
+                </p>
+              </section>
+            </div>
+            <div>
+              <span>03</span>
+              <section>
+                <h3>确认后，创建一张新歌单</h3>
+                <p>
+                  只迁移已勾选的歌曲，保持原始顺序。网易云原歌单不会被修改；没有找到的歌曲可以随匹配报告导出。
+                </p>
+              </section>
+            </div>
+          </div>
+          <div className="privacy-note">
+            <ShieldCheck size={20} />
+            <p>
+              这里只处理歌曲信息，不下载或上传音频。迁移进度仅保存在当前浏览器会话中；关闭标签页后可能丢失，建议完成后导出报告。演示数据不会写入你的账号。
+            </p>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={() => {
+              setModal(null);
+              openDemo();
+            }}
+            disabled={!!busy}
+          >
+            用示例歌单试试看
+            <ArrowRight size={15} />
+          </button>
+        </Modal>
+      )}
+      {modal === "confirm" && (
+        <Modal
+          title={demo ? "体验歌单迁移" : "准备迁移这些喜欢"}
+          onClose={() => setModal(null)}
+        >
+          <div className="confirm-art">
+            <Music2 size={27} />
+            <ArrowRight size={20} />
+            <SpotifyMark />
+          </div>
+          <p className="confirm-description">
+            {demo
+              ? "将模拟迁移到 Spotify，不会向你的账号写入内容。"
+              : "将在你的 Spotify 账号中新建歌单，并写入已选择的歌曲。"}
+          </p>
+          <dl className="confirm-details">
+            <div>
+              <dt>歌单名称</dt>
+              <dd>{name}</dd>
+            </div>
+            <div>
+              <dt>已选歌曲</dt>
+              <dd>{selected.length} 首</dd>
+            </div>
+            <div>
+              <dt>公开状态</dt>
+              <dd>{isPublic ? "公开歌单" : "私密歌单"}</dd>
+            </div>
+            <div>
+              <dt>本次跳过</dt>
+              <dd>{matches.length - selected.length} 首</dd>
+            </div>
+          </dl>
+          <p className="confirm-note">
+            歌曲将按网易云中的原始顺序添加。
+            {counts.pending > 0 &&
+              `还有 ${counts.pending} 首未匹配，本次不会添加。`}
+          </p>
+          <button className="primary-button full-width" onClick={transfer}>
+            {demo ? "确认体验" : "确认创建并迁移"}
+            <ArrowRight size={16} />
+          </button>
+        </Modal>
+      )}
+      {modal === "history" && (
+        <Modal title="本次迁移" onClose={() => setModal(null)}>
+          {playlist ? (
+            <div className="session-summary">
+              <ListMusic size={34} />
+              <h3>{playlist.name}</h3>
+              <p>
+                {demo ? "示例模式 · " : ""}共 {matches.length} 首，已匹配{" "}
+                {completed} 首，选择了 {selected.length} 首。
+              </p>
+              <p>
+                {result
+                  ? result.complete
+                    ? "本次迁移已完成。"
+                    : "本次迁移部分完成，请检查目标歌单。"
+                  : "进度保存在当前标签页，可以继续处理。"}
+              </p>
+              <button className="secondary-button" onClick={() => exportCsv()}>
+                导出当前报告
+                <ArrowDownToLine size={15} />
+              </button>
+            </div>
+          ) : (
+            <div className="session-summary">
+              <Headphones size={35} />
+              <h3>还没有开始的旅程</h3>
+              <p>读取第一张歌单后，可以在这里查看进度。</p>
+            </div>
+          )}
+        </Modal>
+      )}
+      {review && (
+        <Modal title="选择合适的歌曲版本" onClose={() => setReviewId(null)}>
+          <div className="review-source">
+            <span>网易云原曲</span>
+            <h3>{review.source.name}</h3>
+            <p>
+              {review.source.artists.join(" / ")} · {review.source.album} ·{" "}
+              {Math.floor(review.source.durationMs / 60000)}:
+              {String(
+                Math.floor(review.source.durationMs / 1000) % 60,
+              ).padStart(2, "0")}
+            </p>
+          </div>
+          <div className="ai-advice">
+            <div>
+              <Sparkles size={16} />
+              <strong>AI 复核建议</strong>
+              <button
+                className="text-button"
+                disabled={!!busy || writeStarted}
+                onClick={() => runAiReview([review])}
+              >
+                {busy === "ai"
+                  ? "正在复核…"
+                  : review.aiReview
+                    ? "重新复核"
+                    : "请 AI 帮我看看"}
+              </button>
+            </div>
+            {review.aiReview ? (
+              <>
+                <p>{review.aiReview.reason}</p>
+                <span>
+                  {review.aiReview.model} · 判断把握：
+                  {
+                    { high: "较高", medium: "一般", low: "较低" }[
+                      review.aiReview.confidence
+                    ]
+                  }
+                </span>
+                {review.aiReview.candidateId && (
+                  <p>
+                    建议候选：
+                    {
+                      review.candidates.find(
+                        (c) => c.id === review.aiReview?.candidateId,
+                      )?.name
+                    }
+                    。请在下方选择后确认。
+                  </p>
+                )}
+              </>
+            ) : (
+              <p>核对艺人别名、不同语言的歌名和录音版本，仅提供建议。</p>
+            )}
+          </div>
+          <p className="candidate-intro">
+            对照歌手和版本，选择你想带走的那一首。分数是规则评分，不是匹配概率。
+          </p>
+          <div className="candidates">
+            {review.candidates.map((candidate) => (
+              <div className="candidate" key={candidate.id}>
+                <div>
+                  <h3>{candidate.name}</h3>
+                  <p>
+                    {candidate.artists.join(" / ")} · {candidate.album}
+                  </p>
+                  <span>
+                    匹配分 {candidate.score}
+                    {candidate.durationDiff !== null &&
+                      ` · 时长相差 ${(candidate.durationDiff / 1000).toFixed(1)} 秒`}
+                  </span>
+                  {candidate.url && (
+                    <a href={candidate.url} target="_blank" rel="noreferrer">
+                      在 Spotify 查看
+                      <ExternalLink size={12} />
+                    </a>
+                  )}
+                </div>
+                <button
+                  className="secondary-button"
+                  disabled={!!busy || writeStarted}
+                  onClick={() => chooseCandidate(candidate)}
+                >
+                  <Check size={14} />
+                  选择此版本
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            disabled={!!busy || writeStarted}
+            className="text-button skip-button"
+            onClick={() => {
+              setMatches((old) =>
+                old.map((m) =>
+                  m.source.id === reviewId
+                    ? { ...m, included: false, confirmedByUser: true }
+                    : m,
+                ),
+              );
+              setReviewId(null);
+            }}
+          >
+            跳过这首歌曲
+            <ArrowRight size={14} />
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
