@@ -1,6 +1,9 @@
 import { cookies } from "next/headers";
 import { seal, unseal } from "./crypto";
 import { AppError, appUrl } from "./http";
+import { taskOwner } from "./task-owner";
+import { taskStore } from "./task-store";
+import { requestSpotifyToken, taskAccessToken } from "./task-session";
 
 export const SESSION_COOKIE = "songshift_session";
 export const OAUTH_COOKIE = "songshift_oauth";
@@ -47,28 +50,11 @@ export async function getEncryptedCookie<T>(name: string): Promise<T | null> {
 }
 export async function tokenRequest(params: Record<string, string>) {
   secret();
-  const response = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      ...params,
-      client_id: process.env.SPOTIFY_CLIENT_ID!,
-    }),
-    cache: "no-store",
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!response.ok)
-    throw new AppError("Spotify 授权已失效或配置不匹配，请重新连接账号。", 401);
-  const data = await response.json();
-  if (!data.access_token)
-    throw new AppError("Spotify 未返回有效授权，请重新连接。", 401);
-  return data as {
-    access_token: string;
-    refresh_token?: string;
-    expires_in: number;
-  };
+  return requestSpotifyToken(params);
 }
 export async function getAccessToken() {
+  const owner = (await taskOwner(true))!;
+  if (taskStore().account(owner)) return taskAccessToken(owner);
   let session = await getEncryptedCookie<Session>(SESSION_COOKIE);
   if (!session) throw new AppError("请先连接 Spotify 账号。", 401);
   if (session.expiresAt < Date.now() + 60000) {

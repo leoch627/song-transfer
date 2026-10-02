@@ -1,0 +1,26 @@
+[Unit]
+Description=SongShift background matching tasks
+After=network.target
+
+[Service]
+Type=simple
+User=songtransfer
+Group=songtransfer
+WorkingDirectory=/var/www/songtransfer
+Environment=NODE_ENV=production
+Environment=SONGTRANSFER_DATA_DIR=/var/lib/songtransfer
+EnvironmentFile=/etc/songtransfer.env
+StateDirectory=songtransfer
+StateDirectoryMode=0700
+ExecStart=/opt/node-v22.23.3/bin/node --import tsx scripts/task-worker.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=110
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

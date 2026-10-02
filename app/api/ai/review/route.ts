@@ -1,5 +1,5 @@
 import { aiStatus, reviewWithAi } from "@/lib/ai";
-import { getEncryptedCookie, Session, SESSION_COOKIE } from "@/lib/auth";
+import { getAccessToken } from "@/lib/auth";
 import {
   AppError,
   errorResponse,
@@ -29,9 +29,7 @@ export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
     if (!aiStatus().configured) throw new AppError("请先配置 AI 中转站。", 503);
-    const session = await getEncryptedCookie<Session>(SESSION_COOKIE);
-    if (!session || (session.expiresAt <= Date.now() && !session.refreshToken))
-      throw new AppError("请先连接 Spotify，再使用 AI 复核。", 401);
+    await getAccessToken();
     const data = await readBody(request);
     if (
       !validSong(data.source) ||

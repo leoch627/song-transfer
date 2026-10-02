@@ -9,6 +9,8 @@ npm install
 cp .env.example .env.local
 # 按下文填写配置。无需配置也能使用示例模式及读取公开歌单。
 npm run dev
+# 另开一个终端启动后台匹配进程（Node.js >=22.13）：
+node --env-file=.env.local --import tsx scripts/task-worker.ts
 ```
 
 打开 http://127.0.0.1:3002 。不要使用 localhost，以保持 Cookie、请求来源与 OAuth 回调一致。端口 3002 用来避免和父项目冲突。
@@ -56,9 +58,26 @@ AI_API_STYLE=chat_completions
 
 保留原顺序、检测同名不同艺人及 Live/remix 差异；规则评分不是概率。待确认候选必须人工选择后才能导入。导出报告包含所有结果、是否勾选、AI 建议与理由，使用 UTF-8 BOM 并防止 CSV 公式注入。
 
-本机个人使用版本，无数据库、多用户额度控制或后台队列。歌曲进度保存在当前标签页的 sessionStorage，OAuth 跳转及刷新可恢复；关闭标签页或超出浏览器配额可能丢失。长任务请保持页面打开；远程部署需考虑函数执行时限和访问控制。
+网站支持用户名/密码注册与登录，任务按账号隔离，换设备登录后可在「后台任务」中打开。密码使用随机盐与 scrypt 哈希；登录会话使用 HttpOnly Cookie，支持退出注销，并限制注册/登录尝试次数。当前没有邮件找回功能。
 
-写入不自动重试。创建或添加歌曲后的网络超时可能发生在 Spotify 已写入之后：返回的部分成功信息包含目标歌单链接和已确认写入数量；若整个请求响应丢失，界面阻止直接重复创建，并提示先去 Spotify 检查。没有实现跨设备恢复或服务端幂等写入。
+点击「创建后台匹配任务」后，歌曲与进度存入 SQLite，关闭网页、重启服务后可续跑。默认全站共享每滚动 24 小时 400 **次搜索请求**的保守预算（不是 Spotify 官方公布的固定额度，也不是 400 首歌）；每首最多尝试三种查询。已完成结果复用，搜索中途达到配额也会保存查询步骤。识别 Spotify 的 `QUOTA_EXCEEDED` 和 `Retry-After`，等待后自动继续；网络或授权错误需要人工重试/重连。后台只负责匹配，全部完成后仍需人工确认并创建 Spotify 歌单。
+
+Spotify 令牌在数据库中加密保存，以便后台刷新和跨天运行。退出网站账号不停止任务；「断开 Spotify」会移除服务器授权并暂停相关任务。数据库默认在 `data/tasks.sqlite`，可通过 `SONGTRANSFER_DATA_DIR` 指定稳定的数据目录。备份时使用 SQLite 的备份接口或停服务后连同 WAL 文件备份，且需保留 `SESSION_SECRET` 才能解密授权。
+
+写入不自动重试。创建或添加歌曲后的网络超时可能发生在 Spotify 已写入之后：返回的部分成功信息包含目标歌单链接和已确认写入数量；若整个请求响应丢失，界面阻止直接重复创建，并提示先去 Spotify 检查。同一后台任务使用服务器端提交标记阻止并发/重复创建；网络响应丢失时仍需人工检查 Spotify，不会自动重试。任务匹配、人工选择和写入状态可以跨设备恢复。
+
+## 服务器部署
+
+当前站点：https://song.7227.org 。应用位于服务器 `/var/www/songtransfer`，以独立用户 `songtransfer` 运行，监听 `127.0.0.1:3002`。
+
+- Nginx 虚拟主机：`/etc/nginx/sites-available/songtransfer`，配置副本见 `deploy/nginx.conf`。
+- systemd 服务：`songtransfer.service`，配置副本见 `deploy/songtransfer.service`。
+- 后台队列服务：`songtransfer-worker.service`，配置副本见 `deploy/songtransfer-worker.service`；数据库位于 `/var/lib/songtransfer/tasks.sqlite`，发布代码时不得覆盖这个目录。
+- 生产配置：`/etc/songtransfer.env`，仅 root 可读写。填写 `SPOTIFY_CLIENT_ID` 和 `AI_API_KEY` 后执行 `systemctl restart songtransfer`。
+- Spotify 应用需登记回调：`https://song.7227.org/api/auth/callback`。
+- HTTPS 证书由 Certbot 自动续期，续期后自动重载 Nginx。
+
+查看应用日志：`journalctl -u songtransfer -n 100 --no-pager`。
 
 ## 验证
 

@@ -6,3 +6,4 @@ node_modules/
 next-env.d.ts
 test-results/
 .DS_Store
+data/

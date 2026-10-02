@@ -1,5 +1,146 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700;750;800&family=Noto+Sans+SC:wght@400;450;500;550;600;650;700;750;800&display=swap");
 
+.task-budget {
+  margin: 0 24px 22px;
+  padding: 17px 20px;
+  border: 1px solid #e2e8dc;
+  border-radius: 12px;
+  background: #f5f8f0;
+}
+.task-budget > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #4b663e;
+}
+.task-budget p,
+.task-intro {
+  color: #747a70;
+  line-height: 1.8;
+  margin: 9px 0;
+}
+.task-budget .task-resume {
+  color: #8a6127;
+}
+.task-error {
+  color: #af4c33 !important;
+  line-height: 1.7;
+}
+.task-list {
+  display: grid;
+  gap: 14px;
+  margin: 20px 0;
+}
+.task-card {
+  border: 1px solid #e8e8e0;
+  padding: 18px;
+  border-radius: 12px;
+}
+.task-card > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+.task-card strong {
+  overflow-wrap: anywhere;
+}
+.task-card p {
+  color: #777e73;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.task-status {
+  font-size: 11px;
+  color: #637652;
+}
+.task-waiting,
+.task-needs_auth {
+  color: #b58333;
+}
+.task-mini-progress {
+  height: 4px;
+  border-radius: 4px;
+  background: #eeeee8;
+  overflow: hidden;
+  margin: 10px 0;
+}
+.task-mini-progress span {
+  display: block;
+  height: 100%;
+  background: #83a774;
+}
+.task-card-actions {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+}
+.task-quota-summary {
+  color: #567448;
+  background: #f5f8f0;
+  padding: 12px;
+  border-radius: 9px;
+}
+.account-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #e5e5db;
+  background: #fffef9;
+  padding: 8px 13px;
+  border-radius: 8px;
+  font-size: 12px;
+  max-width: 220px;
+  overflow: hidden;
+}
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.account-form p,
+.account-profile p {
+  color: #767e72;
+  line-height: 1.8;
+}
+.account-form label {
+  font-weight: 600;
+}
+.account-form input {
+  padding: 12px 14px;
+  border: 1px solid #deded2;
+  border-radius: 8px;
+  background: #fffefa;
+  min-width: 0;
+}
+.account-form .account-note {
+  font-size: 11px;
+}
+.account-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.account-tabs button {
+  flex: 1;
+  border: 0;
+  border-radius: 8px;
+  padding: 11px;
+  background: #f2f2ec;
+}
+.account-tabs .active {
+  background: #eaf1e3;
+  color: #526d3e;
+  font-weight: 600;
+}
+@media (max-width: 600px) {
+  .task-budget {
+    margin: 0 14px 16px;
+    padding: 14px;
+  }
+}
+
 :root {
   --bg: #faf9f6;
   --paper: #fffefa;

@@ -1,0 +1,27 @@
+[Unit]
+Description=SongShift playlist transfer
+After=network.target
+
+[Service]
+Type=simple
+User=songtransfer
+Group=songtransfer
+WorkingDirectory=/var/www/songtransfer
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=SONGTRANSFER_DATA_DIR=/var/lib/songtransfer
+StateDirectory=songtransfer
+StateDirectoryMode=0700
+EnvironmentFile=/etc/songtransfer.env
+ExecStart=/opt/node-v22.23.3/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3002
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

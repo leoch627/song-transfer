@@ -11,8 +11,12 @@ import {
   tokenRequest,
 } from "@/lib/auth";
 import { appUrl } from "@/lib/http";
+import { taskOwner } from "@/lib/task-owner";
+import { taskStore } from "@/lib/task-store";
 
 export async function GET(request: Request) {
+  if (!(await taskOwner()))
+    return NextResponse.redirect(`${appUrl()}/?auth=site_login`);
   const params = new URL(request.url).searchParams;
   const pending = await getEncryptedCookie<OAuthState>(OAUTH_COOKIE);
   (await cookies()).delete(OAUTH_COOKIE);
@@ -34,15 +38,13 @@ export async function GET(request: Request) {
       redirect_uri: redirectUri(),
       code_verifier: pending.verifier,
     });
-    await setEncryptedCookie(
-      SESSION_COOKIE,
-      {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token || "",
-        expiresAt: Date.now() + data.expires_in * 1000,
-      },
-      60 * 60 * 24 * 7,
-    );
+    const session = {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token || "",
+      expiresAt: Date.now() + data.expires_in * 1000,
+    };
+    taskStore().saveAccount((await taskOwner(true))!, session);
+    await setEncryptedCookie(SESSION_COOKIE, session, 60 * 60 * 24 * 7);
     return NextResponse.redirect(`${appUrl()}/?auth=success`);
   } catch {
     return NextResponse.redirect(`${appUrl()}/?auth=failed`);

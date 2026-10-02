@@ -2,10 +2,15 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { OAUTH_COOKIE, redirectUri, setEncryptedCookie } from "@/lib/auth";
 import { appUrl } from "@/lib/http";
+import { taskOwner } from "@/lib/task-owner";
 
 export async function GET(request: Request) {
   try {
-    if (new URL(request.url).origin !== appUrl())
+    if (!(await taskOwner()))
+      return NextResponse.redirect(`${appUrl()}/?auth=site_login`);
+    // Next.js can use its internal listen address in request.url behind Nginx.
+    // Nginx preserves the public Host header for the canonical-host check.
+    if (request.headers.get("host") !== new URL(appUrl()).host)
       return NextResponse.redirect(`${appUrl()}/api/auth/login`);
     const verifier = randomBytes(48).toString("base64url");
     const state = randomBytes(24).toString("base64url");

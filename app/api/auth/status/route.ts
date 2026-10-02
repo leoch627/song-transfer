@@ -1,12 +1,9 @@
-import {
-  configured,
-  getEncryptedCookie,
-  redirectUri,
-  Session,
-  SESSION_COOKIE,
-} from "@/lib/auth";
+import { configured, redirectUri } from "@/lib/auth";
+import { taskOwner } from "@/lib/task-owner";
+import { taskStore } from "@/lib/task-store";
 export async function GET() {
-  const session = await getEncryptedCookie<Session>(SESSION_COOKIE);
+  const owner = await taskOwner();
+  const session = owner ? taskStore().account(owner) : null;
   return Response.json(
     {
       configured: configured(),

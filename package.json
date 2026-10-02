@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "dev": "next dev --webpack --hostname 127.0.0.1 --port 3002",
@@ -11,7 +11,8 @@
     "start": "next start --hostname 127.0.0.1 --port 3002",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "worker": "node --import tsx scripts/task-worker.ts"
   },
   "dependencies": {
     "lucide-react": "^0.575.0",

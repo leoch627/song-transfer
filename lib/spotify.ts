@@ -17,14 +17,17 @@ export async function spotifyRequest<T>(
     signal: AbortSignal.timeout(25000),
   });
   if (response.status === 429) {
+    const body = await response.json().catch(() => null);
+    const quota = body?.error?.reason === "QUOTA_EXCEEDED";
     const seconds = Math.max(
       1,
-      Number(response.headers.get("retry-after")) || 30,
+      Number(response.headers.get("retry-after")) || (quota ? 86400 : 30),
     );
     throw new AppError(
       `Spotify 请求额度暂时用完，请至少等待 ${seconds} 秒后继续。`,
       429,
       seconds,
+      quota ? "QUOTA_EXCEEDED" : "RATE_LIMITED",
     );
   }
   if (response.status === 401)
@@ -51,7 +54,17 @@ type SpotifyTrack = {
   album: { name: string; images?: { url: string }[] };
   external_urls: { spotify: string };
 };
-export async function searchTrack(token: string, song: Song) {
+export type SearchCheckpoint = { nextQuery: number; candidates: Candidate[] };
+export type SearchOptions = {
+  checkpoint?: SearchCheckpoint;
+  beforeRequest?: () => void;
+  onProgress?: (checkpoint: SearchCheckpoint) => void;
+};
+export async function searchTrack(
+  token: string,
+  song: Song,
+  options: SearchOptions = {},
+) {
   const name = song.name.replaceAll('"', " ");
   const artist = (song.artists[0] || "").replaceAll('"', " ");
   const queries = [
@@ -61,13 +74,26 @@ export async function searchTrack(token: string, song: Song) {
       name,
     ]),
   ];
-  const candidates = new Map<string, Candidate>();
-  for (const query of queries) {
+  const candidates = new Map<string, Candidate>(
+    (options.checkpoint?.candidates || []).map((candidate) => [
+      candidate.id,
+      candidate,
+    ]),
+  );
+  for (
+    let index = options.checkpoint?.nextQuery || 0;
+    index < queries.length;
+    index++
+  ) {
+    if ([...candidates.values()].some((candidate) => candidate.confident))
+      break;
+    const query = queries[index];
     const params = new URLSearchParams({
       q: query,
       type: "track",
       limit: "10",
     });
+    options.beforeRequest?.();
     const data = await spotifyRequest<{
       tracks?: { items: (SpotifyTrack | null)[] };
     }>(token, `/search?${params}`);
@@ -93,6 +119,10 @@ export async function searchTrack(token: string, song: Song) {
         }),
       );
     }
+    options.onProgress?.({
+      nextQuery: index + 1,
+      candidates: [...candidates.values()],
+    });
     if ([...candidates.values()].some((candidate) => candidate.confident))
       break;
   }

@@ -50,6 +50,10 @@ import type {
   Playlist,
 } from "@/lib/types";
 import type { TransferResult } from "@/lib/spotify";
+import { useTaskQueue } from "./use-task-queue";
+import { taskLabels, type TransferTask } from "@/lib/task-types";
+import { AccountForm } from "./account-form";
+import type { User } from "@/lib/accounts";
 
 type Tab = "all" | Match["status"];
 type Saved = {
@@ -59,6 +63,9 @@ type Saved = {
   name: string;
   result: TransferResult | null;
   writeStarted: boolean;
+  taskId?: string | null;
+  isPublic?: boolean;
+  accountId?: string | null;
 };
 const initialAuth: AuthStatus = {
   configured: false,
@@ -204,6 +211,7 @@ function Modal({
 export default function TransferApp() {
   const [auth, setAuth] = useState<AuthStatus>(initialAuth);
   const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [ai, setAi] = useState<AiStatus>({
     configured: false,
     model: "gpt-5.6-luna",
@@ -225,7 +233,7 @@ export default function TransferApp() {
     text: string;
   } | null>(null);
   const [modal, setModal] = useState<
-    "settings" | "help" | "confirm" | "history" | null
+    "settings" | "help" | "confirm" | "history" | "account" | null
   >(null);
   const [reviewId, setReviewId] = useState<string | null>(null);
   const [result, setResult] = useState<TransferResult | null>(null);
@@ -233,9 +241,45 @@ export default function TransferApp() {
   const [hydrated, setHydrated] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [retryAt, setRetryAt] = useState(0);
+  const [taskId, setTaskId] = useState<string | null>(null);
   const stop = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const working = useRef(false);
+  const queue = useTaskQueue({
+    hydrated,
+    accountId: user?.id || null,
+    id: taskId,
+    playlist,
+    matches,
+    workspace: { name, isPublic, result, writeStarted },
+    setId: setTaskId,
+    onLoad: (task: TransferTask, merge: boolean) => {
+      if (!merge) {
+        setPlaylist(task.playlist);
+        setMatches(task.matches);
+        setDemo(false);
+        setName(task.workspace.name);
+        setIsPublic(task.workspace.isPublic);
+        setResult(task.workspace.result);
+        setWriteStarted(task.workspace.writeStarted);
+        setTab("all");
+        setQuery("");
+        setVisibleCount(50);
+        setModal(null);
+      } else {
+        setMatches(task.matches);
+        setName(task.workspace.name);
+        setIsPublic(task.workspace.isPublic);
+        setWriteStarted(task.workspace.writeStarted);
+        setResult(task.workspace.result);
+      }
+    },
+    onError: (error) =>
+      setMessage({
+        kind: "error",
+        text: error instanceof Error ? error.message : "任务操作失败，请重试。",
+      }),
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -251,45 +295,62 @@ export default function TransferApp() {
     api<AiStatus>("/api/ai/status")
       .then(setAi)
       .catch(() => {});
-    queueMicrotask(() => {
-      if (cancelled) return;
-      try {
-        const saved = sessionStorage.getItem(SESSION_KEY);
-        if (saved) {
-          const data: Saved = JSON.parse(saved);
-          if (data.playlist && Array.isArray(data.matches)) {
-            setPlaylist(data.playlist);
-            setMatches(data.matches);
-            setDemo(data.demo);
-            setName(data.name);
-            setResult(data.result);
-            setWriteStarted(!!data.writeStarted);
+    api<{ user: User | null }>("/api/account")
+      .then(({ user: account }) => {
+        if (cancelled) return;
+        setUser(account);
+        try {
+          const saved =
+            localStorage.getItem(SESSION_KEY) ||
+            sessionStorage.getItem(SESSION_KEY);
+          if (saved) {
+            const data: Saved = JSON.parse(saved);
+            if (
+              data.playlist &&
+              Array.isArray(data.matches) &&
+              (!data.accountId || data.accountId === account?.id)
+            ) {
+              setPlaylist(data.playlist);
+              setMatches(data.matches);
+              setDemo(data.demo);
+              setName(data.name);
+              setResult(data.result);
+              setWriteStarted(!!data.writeStarted);
+              setTaskId(data.taskId || null);
+              setIsPublic(!!data.isPublic);
+            }
           }
+        } catch {
+          /* An unavailable browser store does not prevent using the app. */
         }
-      } catch {
-        /* An unavailable browser store does not prevent using the app. */
-      }
-      const authResult = new URLSearchParams(window.location.search).get(
-        "auth",
-      );
-      if (authResult) {
-        const errors: Record<string, string> = {
-          configuration: "请先完成 Spotify 应用配置。",
-          invalid_state: "授权请求已过期或校验失败，请重新连接 Spotify。",
-          denied: "你取消了授权，可以随时重新连接。",
-          failed: "授权未完成，请检查 Client ID 和回调地址后重试。",
-        };
+        const authResult = new URLSearchParams(window.location.search).get(
+          "auth",
+        );
+        if (authResult) {
+          const errors: Record<string, string> = {
+            configuration: "请先完成 Spotify 应用配置。",
+            invalid_state: "授权请求已过期或校验失败，请重新连接 Spotify。",
+            denied: "你取消了授权，可以随时重新连接。",
+            failed: "授权未完成，请检查 Client ID 和回调地址后重试。",
+            site_login: "请先登录网站账号，再连接 Spotify。",
+          };
+          setMessage({
+            kind: authResult === "success" ? "success" : "error",
+            text:
+              authResult === "success"
+                ? "Spotify 已连接，可以开始匹配歌单了。"
+                : errors[authResult] || "授权失败，请重试。",
+          });
+          window.history.replaceState({}, "", "/");
+        }
+        setHydrated(true);
+      })
+      .catch(() =>
         setMessage({
-          kind: authResult === "success" ? "success" : "error",
-          text:
-            authResult === "success"
-              ? "Spotify 已连接，可以开始匹配歌单了。"
-              : errors[authResult] || "授权失败，请重试。",
-        });
-        window.history.replaceState({}, "", "/");
-      }
-      setHydrated(true);
-    });
+          kind: "error",
+          text: "无法读取账号状态，请刷新页面重试。",
+        }),
+      );
     return () => {
       cancelled = true;
       stop.current = true;
@@ -301,7 +362,7 @@ export default function TransferApp() {
     if (!hydrated) return;
     try {
       if (playlist)
-        sessionStorage.setItem(
+        localStorage.setItem(
           SESSION_KEY,
           JSON.stringify({
             playlist,
@@ -310,13 +371,28 @@ export default function TransferApp() {
             name,
             result,
             writeStarted,
+            taskId,
+            isPublic,
+            accountId: user?.id || null,
           } satisfies Saved),
         );
-      else sessionStorage.removeItem(SESSION_KEY);
+      else localStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_KEY);
     } catch {
-      /* Large playlists can exceed browser storage; the current tab remains usable. */
+      /* Server task storage remains available if the browser quota is exhausted. */
     }
-  }, [hydrated, playlist, matches, demo, name, result, writeStarted]);
+  }, [
+    hydrated,
+    playlist,
+    matches,
+    demo,
+    name,
+    result,
+    writeStarted,
+    taskId,
+    isPublic,
+    user,
+  ]);
 
   const completed = matches.filter((m) => m.status !== "pending").length;
   const selected = matches.filter((m) => m.included && m.selected);
@@ -341,6 +417,7 @@ export default function TransferApp() {
     : 0;
 
   function loadPlaylist(data: Playlist, isDemo: boolean) {
+    setTaskId(null);
     setPlaylist(data);
     setDemo(isDemo);
     setName(data.name);
@@ -371,7 +448,7 @@ export default function TransferApp() {
     });
   }
   async function readPlaylist() {
-    if (working.current) return;
+    if (working.current || queue.pending) return;
     if (!parsePlaylistId(input)) {
       setMessage({
         kind: "error",
@@ -398,7 +475,7 @@ export default function TransferApp() {
     }
   }
   function openDemo() {
-    if (working.current) return;
+    if (working.current || queue.pending) return;
     loadPlaylist(demoPlaylist, true);
     setMessage({
       kind: "info",
@@ -406,6 +483,10 @@ export default function TransferApp() {
     });
   }
   function connect() {
+    if (!user) {
+      setModal("account");
+      return;
+    }
     if (!auth.configured) {
       setModal("settings");
       return;
@@ -418,6 +499,10 @@ export default function TransferApp() {
     if (working.current || !playlist) return;
     if (!demo && !auth.connected) {
       connect();
+      return;
+    }
+    if (!demo) {
+      await queue.start();
       return;
     }
     if (Date.now() < retryAt) {
@@ -462,6 +547,10 @@ export default function TransferApp() {
     }
   }
   function pauseMatching() {
+    if (!demo && taskId) {
+      void queue.pause();
+      return;
+    }
     stop.current = true;
     controller.current?.abort();
     setMessage({
@@ -567,7 +656,7 @@ export default function TransferApp() {
     setWriteStarted(true);
     try {
       // Persist before the write so a reload cannot quietly create a second playlist.
-      sessionStorage.setItem(
+      localStorage.setItem(
         SESSION_KEY,
         JSON.stringify({
           playlist,
@@ -576,13 +665,18 @@ export default function TransferApp() {
           name,
           result: null,
           writeStarted: true,
+          taskId,
+          isPublic,
+          accountId: user?.id || null,
         }),
       );
     } catch {
       /* Storage is optional. */
     }
     try {
+      if (taskId) await queue.save();
       const data = await api<TransferResult>("/api/spotify/transfer", {
+        taskId,
         name,
         isPublic,
         uris: selected.map((m) => m.selected!.uri),
@@ -611,8 +705,27 @@ export default function TransferApp() {
       errorMessage(error);
     }
   }
-  function reset() {
+  async function logoutAccount() {
     if (working.current) return;
+    try {
+      await queue.save();
+      await api("/api/account", { action: "logout" });
+      setUser(null);
+      setAuth((old) => ({ ...old, connected: false }));
+      reset();
+      setModal(null);
+      localStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_KEY);
+      setMessage({
+        kind: "info",
+        text: "已退出网站账号，后台任务会继续运行。",
+      });
+    } catch (error) {
+      errorMessage(error);
+    }
+  }
+  function reset() {
+    if (working.current || queue.pending) return;
     setPlaylist(null);
     setMatches([]);
     setResult(null);
@@ -622,6 +735,7 @@ export default function TransferApp() {
     setMobileNav(false);
     setInput("");
     setName("");
+    setTaskId(null);
   }
 
   return (
@@ -658,7 +772,7 @@ export default function TransferApp() {
             }}
           >
             <History size={19} />
-            本次迁移
+            后台任务
           </button>
           <button
             className="nav-item"
@@ -724,6 +838,13 @@ export default function TransferApp() {
             <strong>歌单迁移</strong>
           </div>
           <div className="topbar-right">
+            <button
+              className="account-button"
+              onClick={() => setModal("account")}
+            >
+              <LockKeyhole size={14} />
+              {user ? user.username : "登录 / 注册"}
+            </button>
             <span className="private-label">
               <ShieldCheck size={14} />
               安全连接，安心迁移
@@ -1045,13 +1166,24 @@ export default function TransferApp() {
                 <div className="matching-controls">
                   <div>
                     <h3>
-                      {busy === "match"
-                        ? "正在寻找熟悉的旋律…"
-                        : completed === matches.length && matches.length
-                          ? "匹配完成，每一首都由你决定"
-                          : completed
-                            ? "进度已保存，随时继续"
-                            : "准备好，为歌单找一个新家"}
+                      {!demo &&
+                      queue.task &&
+                      [
+                        "queued",
+                        "running",
+                        "waiting",
+                        "needs_auth",
+                        "failed",
+                        "paused",
+                      ].includes(queue.task.status)
+                        ? taskLabels[queue.task.status]
+                        : busy === "match"
+                          ? "正在寻找熟悉的旋律…"
+                          : completed === matches.length && matches.length
+                            ? "匹配完成，每一首都由你决定"
+                            : completed
+                              ? "进度已保存，随时继续"
+                              : "准备好，为歌单找一个新家"}
                     </h3>
                     <p>
                       {completed
@@ -1059,31 +1191,87 @@ export default function TransferApp() {
                         : "综合歌名、歌手、专辑与时长，寻找合适的版本。"}
                     </p>
                   </div>
-                  {busy === "match" ? (
+                  {busy === "match" ||
+                  (!demo &&
+                    queue.task &&
+                    ["queued", "running", "waiting"].includes(
+                      queue.task.status,
+                    )) ? (
                     <button
                       className="secondary-button"
                       onClick={pauseMatching}
+                      disabled={queue.pending}
                     >
                       <Pause size={14} />
-                      暂停匹配
+                      {demo ? "暂停匹配" : "暂停任务"}
                     </button>
                   ) : (
                     completed < matches.length && (
                       <button
                         className="primary-button"
-                        disabled={!!busy || writeStarted}
+                        disabled={!!busy || writeStarted || queue.pending}
                         onClick={matchPlaylist}
                       >
                         <Sparkles size={15} />
-                        {completed
-                          ? "继续匹配"
-                          : demo
-                            ? "体验智能匹配"
-                            : "开始智能匹配"}
+                        {queue.pending
+                          ? "正在保存任务…"
+                          : completed
+                            ? "继续匹配"
+                            : demo
+                              ? "体验智能匹配"
+                              : "创建后台匹配任务"}
                       </button>
                     )
                   )}
                 </div>
+                {!demo && (
+                  <div className="task-budget" aria-live="polite">
+                    <div>
+                      <History size={17} />
+                      <strong>
+                        {queue.quota
+                          ? `近 24 小时已用 ${queue.quota.used} / ${queue.quota.limit} 次搜索`
+                          : "每日分批，自动续跑"}
+                      </strong>
+                    </div>
+                    <p>
+                      每首歌可能搜索 1～3
+                      次。用完额度会自动等待，已完成的歌曲不再搜索。创建任务后可以关闭网页。
+                    </p>
+                    {queue.task?.resumeAt ? (
+                      <p className="task-resume">
+                        预计{" "}
+                        {new Date(queue.task.resumeAt).toLocaleString("zh-CN")}{" "}
+                        后继续；实际以 Spotify 可用额度为准。
+                      </p>
+                    ) : null}
+                    {queue.task?.error && (
+                      <p className="task-error">{queue.task.error}</p>
+                    )}
+                    {queue.task?.status === "needs_auth" && (
+                      <button className="text-button" onClick={connect}>
+                        重新连接 Spotify
+                      </button>
+                    )}
+                    {queue.syncError && (
+                      <p className="task-error">
+                        {queue.syncError}{" "}
+                        <button
+                          className="text-button"
+                          onClick={() => void queue.save().catch(errorMessage)}
+                        >
+                          重试保存
+                        </button>
+                      </p>
+                    )}
+                    <button
+                      className="text-button"
+                      onClick={() => setModal("history")}
+                    >
+                      查看全部后台任务 <ArrowRight size={13} />
+                    </button>
+                  </div>
+                )}
                 {(completed > 0 || busy === "match") && (
                   <div
                     className="progress-track"
@@ -1432,7 +1620,8 @@ export default function TransferApp() {
                       writeStarted ||
                       !selected.length ||
                       !name.trim() ||
-                      (!demo && !auth.connected)
+                      (!demo && !auth.connected) ||
+                      (!demo && !!taskId && completed < matches.length)
                     }
                   >
                     {busy === "transfer" ? (
@@ -1444,6 +1633,11 @@ export default function TransferApp() {
                       ? "正在迁移，请保持页面打开…"
                       : `${demo ? "体验迁移" : "迁移到 Spotify"}${selected.length ? ` · ${selected.length} 首` : ""}`}
                   </button>
+                  {!demo && taskId && completed < matches.length && (
+                    <p className="write-warning">
+                      后台会分批完成匹配，全部完成后再统一确认并迁移。
+                    </p>
+                  )}
                   {writeStarted && !busy && (
                     <p className="write-warning">
                       上次写入结果尚未确认。请先在 Spotify
@@ -1555,6 +1749,43 @@ export default function TransferApp() {
           </div>
         </Modal>
       )}
+      {modal === "account" && (
+        <Modal
+          title={user ? "我的账号" : "登录 SongShift"}
+          onClose={() => setModal(null)}
+        >
+          {user ? (
+            <div className="account-profile">
+              <h3>{user.username}</h3>
+              <p>
+                后台任务已绑定账号，换设备登录后可以继续查看和处理。退出网站账号不会停止后台任务；需要停止时请暂停任务或断开
+                Spotify。
+              </p>
+              <button
+                className="secondary-button"
+                onClick={logoutAccount}
+                disabled={!!busy || queue.pending}
+              >
+                退出登录
+              </button>
+            </div>
+          ) : (
+            <AccountForm
+              onSuccess={(account) => {
+                setUser(account);
+                setModal(null);
+                void api<AuthStatus>("/api/auth/status")
+                  .then(setAuth)
+                  .catch(errorMessage);
+                setMessage({
+                  kind: "success",
+                  text: "登录成功，可以创建后台任务。",
+                });
+              }}
+            />
+          )}
+        </Modal>
+      )}
       {modal === "help" && (
         <Modal title="带着喜欢的音乐出发" onClose={() => setModal(null)}>
           <div className="help-steps">
@@ -1591,7 +1822,8 @@ export default function TransferApp() {
           <div className="privacy-note">
             <ShieldCheck size={20} />
             <p>
-              这里只处理歌曲信息，不下载或上传音频。迁移进度仅保存在当前浏览器会话中；关闭标签页后可能丢失，建议完成后导出报告。演示数据不会写入你的账号。
+              这里只处理歌曲信息，不下载或上传音频。后台任务与进度保存在账号下，换设备登录也能继续；授权令牌加密保存，用于隔天续跑。退出网站账号不影响任务，断开
+              Spotify 会暂停后台任务。演示数据不会写入你的账号。
             </p>
           </div>
           <button
@@ -1652,7 +1884,77 @@ export default function TransferApp() {
         </Modal>
       )}
       {modal === "history" && (
-        <Modal title="本次迁移" onClose={() => setModal(null)}>
+        <Modal title="后台任务" onClose={() => setModal(null)}>
+          <p className="task-intro">
+            任务会在服务器分批匹配。关闭网页不影响运行；额度不足时自动等待，恢复后继续。登录同一账号即可跨设备查看。
+          </p>
+          {!user && (
+            <button
+              className="primary-button"
+              onClick={() => setModal("account")}
+            >
+              登录后查看我的任务
+            </button>
+          )}
+          {queue.quota && (
+            <p className="task-quota-summary">
+              近 24 小时：{queue.quota.used} / {queue.quota.limit} 次搜索 ·
+              当前剩余 {queue.quota.remaining} 次
+            </p>
+          )}
+          <div className="task-list">
+            {(user ? queue.tasks : []).map((item) => (
+              <div className="task-card" key={item.id}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span className={`task-status task-${item.status}`}>
+                    {taskLabels[item.status]}
+                  </span>
+                </div>
+                <p>
+                  已完成 {item.completed} / {item.total} 首
+                  {item.id === taskId ? " · 当前任务" : ""}
+                </p>
+                <div className="task-mini-progress">
+                  <span
+                    style={{
+                      width: `${item.total ? (item.completed / item.total) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                {item.resumeAt > 0 && (
+                  <p>
+                    预计继续：{new Date(item.resumeAt).toLocaleString("zh-CN")}
+                  </p>
+                )}
+                {item.error && <p className="task-error">{item.error}</p>}
+                <div className="task-card-actions">
+                  <button
+                    className="secondary-button"
+                    disabled={!!busy || queue.pending}
+                    onClick={() => void queue.open(item.id)}
+                  >
+                    打开任务 <ArrowRight size={13} />
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={!!busy || queue.pending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `删除“${item.name}”的后台任务和匹配结果？Spotify 歌单不会受影响。`,
+                        )
+                      )
+                        void queue.remove(item.id);
+                    }}
+                  >
+                    删除任务
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {queue.syncError && <p className="task-error">{queue.syncError}</p>}
           {playlist ? (
             <div className="session-summary">
               <ListMusic size={34} />
@@ -1666,7 +1968,9 @@ export default function TransferApp() {
                   ? result.complete
                     ? "本次迁移已完成。"
                     : "本次迁移部分完成，请检查目标歌单。"
-                  : "进度保存在当前标签页，可以继续处理。"}
+                  : taskId
+                    ? "已保存为后台任务，可跨天继续。"
+                    : "当前进度保存在此浏览器；点击创建后台任务后可关闭网页。"}
               </p>
               <button className="secondary-button" onClick={() => exportCsv()}>
                 导出当前报告

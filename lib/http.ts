@@ -3,6 +3,7 @@ export class AppError extends Error {
     message: string,
     public status = 400,
     public retryAfter?: number,
+    public reason?: string,
   ) {
     super(message);
   }
@@ -29,11 +30,12 @@ export function requireSameOrigin(request: Request) {
 
 export async function readBody(
   request: Request,
+  maxLength = 1_000_000,
 ): Promise<Record<string, unknown>> {
   if (!request.headers.get("content-type")?.includes("application/json"))
     throw new AppError("请使用 JSON 请求。", 415);
   const body = await request.text();
-  if (body.length > 1_000_000) throw new AppError("请求内容过大。", 413);
+  if (body.length > maxLength) throw new AppError("请求内容过大。", 413);
   try {
     const data = JSON.parse(body);
     if (!data || Array.isArray(data) || typeof data !== "object")
@@ -50,6 +52,7 @@ export function errorResponse(error: unknown) {
     {
       error: known ? error.message : "服务暂时无法连接，请稍后重试。",
       retryAfter: known ? error.retryAfter : undefined,
+      reason: known ? error.reason : undefined,
     },
     {
       status: known ? error.status : 502,
