@@ -27,6 +27,17 @@ function versions(name: string) {
     .join("|");
 }
 
+export function needsArtistResearch(source: Song, candidates: Candidate[]) {
+  const best = candidates[0];
+  return (
+    !best ||
+    normalize(source.name) !== normalize(best.name) ||
+    !source.artists.some((a) =>
+      best.artists.some((b) => normalize(a) === normalize(b)),
+    )
+  );
+}
+
 export function scoreCandidate(
   source: Song,
   track: Song & { uri: string; url: string },
@@ -133,11 +144,15 @@ export function matchesToCsv(matches: Match[]): string {
     match.aiReview?.decision,
     match.aiReview?.candidateId,
     match.aiReview?.reason,
+    match.aiReview?.matchKind,
+    match.aiReview?.research?.originalArtist,
+    match.aiReview?.research?.summary,
+    match.aiReview?.research?.sources.map((s) => s.url).join(" | "),
   ]);
   return (
     "\uFEFF" +
     [
-      "netease_name,netease_artist,spotify_name,spotify_artist,spotify_url,score,duration_diff_ms,status,included,ai_decision,ai_candidate_id,ai_reason",
+      "netease_name,netease_artist,spotify_name,spotify_artist,spotify_url,score,duration_diff_ms,status,included,ai_decision,ai_candidate_id,ai_reason,ai_match_kind,original_artist,research_summary,research_sources",
       ...rows.map((row) => row.map(escape).join(",")),
     ].join("\r\n")
   );
@@ -147,8 +162,8 @@ export function needsAiReview(match: Match): boolean {
   return (
     !match.confirmedByUser &&
     !match.aiReview &&
-    match.candidates.length > 0 &&
-    (match.status === "review" ||
+    (match.status === "missing" ||
+      match.status === "review" ||
       (match.status === "matched" &&
         !!match.selected &&
         (match.selected.score < 100 ||
@@ -161,6 +176,7 @@ export function applyAiReview(match: Match, advice: AiReview): Match {
   const agrees =
     advice.decision === "match" &&
     advice.confidence === "high" &&
+    advice.matchKind !== "original_alternative" &&
     advice.candidateId === match.selected?.id;
   return {
     ...match,

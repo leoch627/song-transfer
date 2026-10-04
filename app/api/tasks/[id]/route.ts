@@ -8,6 +8,7 @@ import {
 import { taskOwner } from "@/lib/task-owner";
 import { taskStore } from "@/lib/task-store";
 import { validateMatch } from "@/lib/task-validation";
+import { applyAiReview } from "@/lib/matching";
 import type { TaskWorkspace } from "@/lib/task-types";
 import type { Match } from "@/lib/types";
 
@@ -63,10 +64,18 @@ export async function POST(request: Request, context: Context) {
             )
           )
             throw new AppError("候选歌曲不属于这个任务。");
-          const match = validateMatch(
+          let match = validateMatch(
             { ...incoming, candidates: original.candidates },
             original.source,
           );
+          // A stale browser save must not erase a newer server-saved AI review.
+          if (
+            match &&
+            original.aiReview &&
+            (original.aiReview.reviewedAt || 0) >
+              (match.aiReview?.reviewedAt || 0)
+          )
+            match = applyAiReview(match, original.aiReview);
           if (match && original.status !== "pending")
             updates.push({ index: update.index, match });
         }

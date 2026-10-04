@@ -1,5 +1,7 @@
 import { AppError } from "./http";
 import { makeMatch, scoreCandidate } from "./matching";
+import { validateReview } from "./ai";
+import { safeSourceUrl } from "./ai-research";
 import type { Candidate, Match, Playlist, Song } from "./types";
 
 export function validSong(value: unknown): value is Song {
@@ -97,7 +99,42 @@ export function validateMatch(value: unknown, source: Song): Match | null {
     m.aiReview.reason.length <= 1000 &&
     ["match", "skip", "uncertain"].includes(m.aiReview.decision)
   ) {
-    base.aiReview = m.aiReview;
+    const checked = validateReview(
+      m.aiReview,
+      candidates,
+      String(m.aiReview.model || "AI").slice(0, 100),
+    );
+    // Keep old review dates absent rather than treating a browser save as a fresh review.
+    checked.reviewedAt = Number.isFinite(m.aiReview.reviewedAt)
+      ? m.aiReview.reviewedAt
+      : undefined;
+    if (typeof m.aiReview.searchWarning === "string")
+      checked.searchWarning = m.aiReview.searchWarning.slice(0, 1000);
+    const research = m.aiReview.research;
+    if (
+      research &&
+      typeof research.summary === "string" &&
+      Array.isArray(research.sources)
+    ) {
+      checked.research = {
+        summary: research.summary.slice(0, 2000),
+        originalArtist:
+          typeof research.originalArtist === "string"
+            ? research.originalArtist.slice(0, 200)
+            : null,
+        queries: [],
+        searchedAt: Number.isFinite(research.searchedAt)
+          ? research.searchedAt
+          : 0,
+        sources: research.sources.slice(0, 6).flatMap((s) => {
+          const url = safeSourceUrl(s?.url);
+          return url && typeof s.title === "string"
+            ? [{ url, title: s.title.slice(0, 200) }]
+            : [];
+        }),
+      };
+    }
+    base.aiReview = checked;
     if (!m.confirmedByUser && m.status === "review") {
       base.status = "review";
       base.included = false;

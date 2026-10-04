@@ -5,7 +5,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { AppError } from "./http";
 import { seal, unseal } from "./crypto";
 import type { Session } from "./auth";
-import type { Match, Playlist, Song } from "./types";
+import type { AiReviewResponse, Match, Playlist, Song } from "./types";
+import { applyAiReview } from "./matching";
 import type {
   QuotaStatus,
   TaskSummary,
@@ -261,9 +262,22 @@ export class TaskStore {
   summary(row: Row): TaskSummary {
     const counts = this.db
       .prepare(
-        "SELECT COUNT(*) AS total, COUNT(match) AS completed FROM task_songs WHERE task_id=?",
+        `SELECT COUNT(*) AS total, COUNT(match) AS completed,
+        COUNT(json_extract(match,'$.aiReview.decision')) AS aiReviewed,
+        COALESCE(SUM(json_extract(match,'$.aiReview.decision')='match'),0) AS aiMatched,
+        COALESCE(SUM(json_extract(match,'$.aiReview.decision')='skip'),0) AS aiSkipped,
+        COALESCE(SUM(json_extract(match,'$.aiReview.decision')='uncertain'),0) AS aiUncertain
+        FROM task_songs WHERE task_id=?`,
       )
-      .get(row.id) as { total: number; completed: number };
+      .get(row.id) as Pick<
+      TaskSummary,
+      | "total"
+      | "completed"
+      | "aiReviewed"
+      | "aiMatched"
+      | "aiSkipped"
+      | "aiUncertain"
+    >;
     return {
       id: row.id,
       name: JSON.parse(row.workspace).name,
@@ -358,6 +372,44 @@ export class TaskStore {
         this.db
           .prepare("UPDATE tasks SET updated_at=? WHERE id=?")
           .run(this.now(), id);
+    });
+  }
+  saveAiReview(
+    id: string,
+    owner: string,
+    index: number,
+    result: AiReviewResponse,
+  ) {
+    return this.transaction(() => {
+      const task = this.get(id, owner);
+      const match = task.matches[index];
+      if (task.workspace.writeStarted || !match || match.status === "pending")
+        throw new AppError(
+          "歌曲尚未匹配或任务已开始迁移，复核结果未应用。",
+          409,
+        );
+      const { candidates: incoming, ...review } = result;
+      const candidates = [...(incoming || match.candidates)];
+      // Preserve a manual selection made while the network request was in flight.
+      if (
+        match.selected &&
+        !candidates.some((c) => c.id === match.selected!.id)
+      ) {
+        if (candidates.length >= 5)
+          candidates.splice(
+            candidates.findLastIndex((c) => c.id !== review.candidateId),
+            1,
+          );
+        candidates.push(match.selected);
+      }
+      const updated = applyAiReview({ ...match, candidates }, review);
+      this.db
+        .prepare("UPDATE task_songs SET match=? WHERE task_id=? AND position=?")
+        .run(JSON.stringify(updated), id, index);
+      this.db
+        .prepare("UPDATE tasks SET updated_at=? WHERE id=?")
+        .run(this.now(), id);
+      return { ...review, candidates };
     });
   }
   beginTransfer(id: string, owner: string) {

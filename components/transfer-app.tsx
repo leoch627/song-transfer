@@ -39,10 +39,12 @@ import {
   applyAiReview,
   matchesToCsv,
   needsAiReview,
+  needsArtistResearch,
   parsePlaylistId,
 } from "@/lib/matching";
 import type {
   AiReview,
+  AiReviewResponse,
   AiStatus,
   AuthStatus,
   Candidate,
@@ -56,6 +58,12 @@ import { AccountForm } from "./account-form";
 import type { User } from "@/lib/accounts";
 
 type Tab = "all" | Match["status"];
+type AiFilter = "all" | "reviewed" | "pending" | AiReview["decision"];
+const aiDecisionLabels = {
+  match: "建议匹配",
+  skip: "建议跳过",
+  uncertain: "仍不确定",
+};
 type Saved = {
   playlist: Playlist;
   matches: Match[];
@@ -242,6 +250,14 @@ export default function TransferApp() {
   const [mobileNav, setMobileNav] = useState(false);
   const [retryAt, setRetryAt] = useState(0);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [aiFilter, setAiFilter] = useState<AiFilter>("all");
+  const [aiBatch, setAiBatch] = useState<{
+    taskId: string | null;
+    done: number;
+    total: number;
+    current: string;
+    state: "running" | "paused" | "failed" | "complete";
+  } | null>(null);
   const stop = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const working = useRef(false);
@@ -255,6 +271,8 @@ export default function TransferApp() {
     setId: setTaskId,
     onLoad: (task: TransferTask, merge: boolean) => {
       if (!merge) {
+        setAiFilter("all");
+        setAiBatch(null);
         setPlaylist(task.playlist);
         setMatches(task.matches);
         setDemo(false);
@@ -406,17 +424,52 @@ export default function TransferApp() {
   const filtered = matches.filter(
     (m) =>
       (tab === "all" || m.status === tab) &&
+      (aiFilter === "all" ||
+        (aiFilter === "reviewed"
+          ? !!m.aiReview
+          : aiFilter === "pending"
+            ? needsAiReview(m)
+            : m.aiReview?.decision === aiFilter)) &&
       `${m.source.name} ${m.source.artists.join(" ")} ${m.selected?.name || ""}`
         .toLocaleLowerCase()
         .includes(query.toLocaleLowerCase()),
   );
   const review = matches.find((m) => m.source.id === reviewId);
   const aiPending = matches.filter(needsAiReview);
+  const aiUnverified = matches.filter(
+    (m) =>
+      m.aiReview &&
+      !m.aiReview.research &&
+      needsArtistResearch(m.source, m.candidates),
+  );
+  const aiReviewed = matches.filter((m) => m.aiReview);
+  const aiCounts = {
+    match: aiReviewed.filter((m) => m.aiReview?.decision === "match").length,
+    skip: aiReviewed.filter((m) => m.aiReview?.decision === "skip").length,
+    uncertain: aiReviewed.filter((m) => m.aiReview?.decision === "uncertain")
+      .length,
+  };
+  const aiTotal = aiReviewed.length + aiPending.length;
+  const lastAiReview = [...aiReviewed].sort(
+    (a, b) => (b.aiReview?.reviewedAt || 0) - (a.aiReview?.reviewedAt || 0),
+  )[0];
+  const aiProgress = aiTotal
+    ? Math.round((aiReviewed.length / aiTotal) * 100)
+    : 0;
+  const savedAiCount = !demo && taskId ? queue.task?.aiReviewed : undefined;
+  function filterAi(value: AiFilter) {
+    setAiFilter(value);
+    setTab("all");
+    setQuery("");
+    setVisibleCount(50);
+  }
   const progress = matches.length
     ? Math.round((completed / matches.length) * 100)
     : 0;
 
   function loadPlaylist(data: Playlist, isDemo: boolean) {
+    setAiFilter("all");
+    setAiBatch(null);
     setTaskId(null);
     setPlaylist(data);
     setDemo(isDemo);
@@ -574,7 +627,7 @@ export default function TransferApp() {
     );
     setReviewId(null);
   }
-  async function runAiReview(items: Match[]) {
+  async function runAiReview(items: Match[], webSearch = false) {
     if (working.current || writeStarted || !items.length) return;
     if (!demo && !ai.configured) {
       setModal("settings");
@@ -586,10 +639,27 @@ export default function TransferApp() {
     setMessage(null);
     stop.current = false;
     controller.current = new AbortController();
+    setAiBatch({
+      taskId,
+      done: 0,
+      total: items.length,
+      current: "",
+      state: "running",
+    });
+    let done = 0;
     try {
+      if (!demo && taskId) await queue.save();
       for (const match of items) {
         if (stop.current) break;
+        setAiBatch({
+          taskId,
+          done,
+          total: items.length,
+          current: match.source.name,
+          state: "running",
+        });
         let advice: AiReview;
+        let candidates: Candidate[] | undefined;
         if (demo) {
           await new Promise((resolve) => setTimeout(resolve, 650));
           advice = {
@@ -601,20 +671,46 @@ export default function TransferApp() {
               : "示例建议：候选标注 Live，且比原曲长 28 秒，可能是不同的现场录音。建议跳过，或人工确认后再选择。",
             model: `${ai.model} · 模拟结果`,
           };
-        } else
-          advice = await api<AiReview>(
+        } else {
+          const response = await api<AiReviewResponse>(
             "/api/ai/review",
-            { source: match.source, candidates: match.candidates },
+            {
+              source: match.source,
+              candidates: match.candidates,
+              taskId,
+              webSearch,
+            },
             controller.current.signal,
           );
+          ({ candidates, ...advice } = response);
+        }
         if (stop.current) break;
         setMatches((old) =>
           old.map((m) =>
-            m.source.id === match.source.id ? applyAiReview(m, advice) : m,
+            m.source.id === match.source.id
+              ? applyAiReview(
+                  { ...m, candidates: candidates || m.candidates },
+                  advice,
+                )
+              : m,
           ),
         );
+        done++;
+        setAiBatch({
+          taskId,
+          done,
+          total: items.length,
+          current: match.source.name,
+          state: "running",
+        });
       }
+      setAiBatch((old) =>
+        old ? { ...old, state: stop.current ? "paused" : "complete" } : null,
+      );
     } catch (error) {
+      setAiBatch((old) =>
+        old ? { ...old, state: stop.current ? "paused" : "failed" } : null,
+      );
       if (!stop.current) errorMessage(error);
     } finally {
       working.current = false;
@@ -1291,14 +1387,20 @@ export default function TransferApp() {
                     </div>
                     <div>
                       <h3>
-                        多一双耳朵，少一点不确定<span>AI 复核</span>
+                        AI 复核进度<span>{demo ? "示例" : "结果逐首保存"}</span>
                       </h3>
                       <p>
-                        {busy === "ai"
-                          ? "正在核对歌曲元数据，已完成的建议会保留…"
-                          : aiPending.length
-                            ? `${aiPending.length} 首歌曲值得再检查一下 · ${demo ? "演示模式" : ai.model}`
-                            : `已复核 ${matches.filter((m) => m.aiReview).length} 首 · 可在歌曲详情中单独复核`}
+                        已复核 {aiReviewed.length} 首 · 待复核{" "}
+                        {aiPending.length} 首
+                        {savedAiCount !== undefined &&
+                          ` · 服务器已保存 ${savedAiCount} 首`}
+                      </p>
+                      <p>
+                        {aiBatch?.taskId === taskId
+                          ? `本轮 ${aiBatch.done} / ${aiBatch.total} 首（${Math.round((aiBatch.done / aiBatch.total) * 100)}%） · ${{ running: "正在处理", paused: "已暂停于", failed: "中断于", complete: "最后完成" }[aiBatch.state]}：${aiBatch.current || "准备中"}`
+                          : lastAiReview?.aiReview?.reviewedAt
+                            ? `最近完成：${lastAiReview.source.name} · ${aiDecisionLabels[lastAiReview.aiReview.decision]} · ${new Date(lastAiReview.aiReview.reviewedAt).toLocaleString("zh-CN")}`
+                            : "点击下面的结果分类，查看已完成的歌曲和判断理由。"}
                       </p>
                     </div>
                     {busy === "ai" ? (
@@ -1319,13 +1421,77 @@ export default function TransferApp() {
                         disabled={!!busy || writeStarted || !aiPending.length}
                       >
                         <Sparkles size={13} />
-                        {demo ? "体验 AI 复核" : "AI 复核疑似歌曲"}
+                        {demo
+                          ? "体验 AI 复核"
+                          : aiReviewed.length
+                            ? "继续复核未处理歌曲"
+                            : "AI 复核疑似歌曲"}
                       </button>
                     )}
                     <span className="ai-data-note">
-                      仅发送待复核歌曲及候选的歌名、歌手、专辑和时长；建议由你最终确认。
+                      歌手或歌名不一致时联网核实别名、原唱及简繁体写法。请保持网页打开；刷新后可继续剩余歌曲，建议需你确认。
                     </span>
                   </div>
+                )}
+                {completed > 0 && (
+                  <section
+                    className="ai-results"
+                    aria-label="AI 复核结果"
+                    aria-live="polite"
+                  >
+                    <div className="ai-progress-label">
+                      待复核范围已完成 {aiProgress}% · 未匹配完的歌曲会随后加入
+                    </div>
+                    <div
+                      className="progress-track"
+                      role="progressbar"
+                      aria-label="AI 复核完成比例"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={aiProgress}
+                    >
+                      <span style={{ width: `${aiProgress}%` }} />
+                    </div>
+                    <div className="ai-result-filters">
+                      {(
+                        [
+                          ["all", "全部歌曲", matches.length],
+                          ["reviewed", "已复核", aiReviewed.length],
+                          ["pending", "待复核", aiPending.length],
+                          ["match", "建议匹配", aiCounts.match],
+                          ["skip", "建议跳过", aiCounts.skip],
+                          ["uncertain", "仍不确定", aiCounts.uncertain],
+                        ] as const
+                      ).map(([key, label, count]) => (
+                        <button
+                          key={key}
+                          aria-pressed={aiFilter === key}
+                          onClick={() => filterAi(key)}
+                        >
+                          {label} <strong>{count}</strong>
+                        </button>
+                      ))}
+                      <button
+                        disabled={!aiReviewed.length}
+                        onClick={() => exportCsv(aiReviewed)}
+                      >
+                        <ArrowDownToLine size={14} />
+                        导出复核结果
+                      </button>
+                      {!demo && ai.webSearch && aiUnverified.length > 0 && (
+                        <button
+                          disabled={!!busy || writeStarted}
+                          onClick={() => runAiReview(aiUnverified, true)}
+                        >
+                          <Search size={14} />
+                          联网复查已有建议（{aiUnverified.length}）
+                        </button>
+                      )}
+                    </div>
+                    <p>
+                      “建议匹配”不会自动勾选待确认歌曲；“原唱替代”需单独确认版本。
+                    </p>
+                  </section>
                 )}
                 <div className="table-toolbar">
                   <div
@@ -1500,13 +1666,25 @@ export default function TransferApp() {
                                 )}
                                 {labels[match.status]}
                               </span>
+                              {match.aiReview && (
+                                <button
+                                  className={`ai-result-badge ai-${match.aiReview.decision}`}
+                                  onClick={() => setReviewId(match.source.id)}
+                                  title={match.aiReview.reason}
+                                >
+                                  <Sparkles size={12} />
+                                  {match.aiReview.matchKind ===
+                                  "original_alternative"
+                                    ? "原唱替代 · 待确认"
+                                    : aiDecisionLabels[match.aiReview.decision]}
+                                </button>
+                              )}
                             </td>
                             <td>
-                              {match.candidates.length > 0 && (
+                              {match.status !== "pending" && (
                                 <button
                                   className="row-action"
                                   onClick={() => setReviewId(match.source.id)}
-                                  disabled={!!busy || writeStarted}
                                   aria-label={`查看 ${match.source.name} 的匹配候选`}
                                 >
                                   <Settings2 size={16} />
@@ -1915,6 +2093,11 @@ export default function TransferApp() {
                   已完成 {item.completed} / {item.total} 首
                   {item.id === taskId ? " · 当前任务" : ""}
                 </p>
+                <p>
+                  AI 已复核 {item.aiReviewed || 0} 首 · 建议匹配{" "}
+                  {item.aiMatched || 0} · 跳过 {item.aiSkipped || 0} · 不确定{" "}
+                  {item.aiUncertain || 0}
+                </p>
                 <div className="task-mini-progress">
                   <span
                     style={{
@@ -2014,10 +2197,59 @@ export default function TransferApp() {
                     ? "重新复核"
                     : "请 AI 帮我看看"}
               </button>
+              {!demo && ai.webSearch && (
+                <button
+                  className="text-button"
+                  disabled={!!busy || writeStarted}
+                  onClick={() => runAiReview([review], true)}
+                >
+                  <Search size={13} />
+                  联网查原唱
+                </button>
+              )}
             </div>
             {review.aiReview ? (
               <>
+                <p>
+                  <strong>
+                    {review.aiReview.matchKind === "original_alternative"
+                      ? "原唱替代版本 · 不是原曲录音，需确认"
+                      : aiDecisionLabels[review.aiReview.decision]}
+                  </strong>
+                </p>
                 <p>{review.aiReview.reason}</p>
+                {review.aiReview.reviewedAt && (
+                  <p>
+                    复核完成于{" "}
+                    {new Date(review.aiReview.reviewedAt).toLocaleString(
+                      "zh-CN",
+                    )}
+                  </p>
+                )}
+                {review.aiReview.research ? (
+                  <div className="ai-research">
+                    <strong>
+                      联网核实 · 原唱：
+                      {review.aiReview.research.originalArtist || "尚未确认"}
+                    </strong>
+                    <p>{review.aiReview.research.summary}</p>
+                    <ul>
+                      {review.aiReview.research.sources.map((source) => (
+                        <li key={source.url}>
+                          <a href={source.url} target="_blank" rel="noreferrer">
+                            {source.title}
+                            <ExternalLink size={12} />
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>此建议尚无联网来源，可点击「联网查原唱」重新核实。</p>
+                )}
+                {review.aiReview.searchWarning && (
+                  <p className="task-error">{review.aiReview.searchWarning}</p>
+                )}
                 <span>
                   {review.aiReview.model} · 判断把握：
                   {

@@ -37,8 +37,24 @@ export type AiReview = {
   confidence: "high" | "medium" | "low";
   reason: string;
   model: string;
+  matchKind?: "same_recording" | "original_alternative" | "no_match";
+  reviewedAt?: number;
+  research?: ArtistResearch;
+  searchWarning?: string;
 };
-export type AiStatus = { configured: boolean; model: string };
+export type ArtistResearch = {
+  summary: string;
+  originalArtist: string | null;
+  queries: { title: string; artist: string }[];
+  sources: { title: string; url: string }[];
+  searchedAt: number;
+};
+export type AiReviewResponse = AiReview & { candidates?: Candidate[] };
+export type AiStatus = {
+  configured: boolean;
+  model: string;
+  webSearch?: boolean;
+};
 export type AuthStatus = {
   configured: boolean;
   connected: boolean;

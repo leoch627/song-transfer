@@ -99,36 +99,10 @@ export async function searchTrack(
     if ([...candidates.values()].some((candidate) => candidate.confident))
       break;
     const query = queries[index];
-    const params = new URLSearchParams({
-      q: query,
-      type: "track",
-      limit: "10",
-    });
     options.beforeRequest?.();
-    const data = await spotifyRequest<{
-      tracks?: { items: (SpotifyTrack | null)[] };
-    }>(token, `/search?${params}`);
-    for (const item of data.tracks?.items || []) {
-      if (
-        !item ||
-        !item.id ||
-        item.is_playable === false ||
-        candidates.has(item.id)
-      )
-        continue;
-      candidates.set(
-        item.id,
-        scoreCandidate(song, {
-          id: item.id,
-          name: item.name,
-          artists: item.artists.map((a) => a.name),
-          album: item.album.name,
-          durationMs: item.duration_ms,
-          cover: item.album.images?.at(-1)?.url,
-          uri: item.uri,
-          url: item.external_urls.spotify,
-        }),
-      );
+    for (const candidate of await searchCandidates(token, song, query)) {
+      if (!candidates.has(candidate.id))
+        candidates.set(candidate.id, candidate);
     }
     options.onProgress?.({
       nextQuery: index + 1,
@@ -139,6 +113,37 @@ export async function searchTrack(
   }
   const match = makeMatch(song, [...candidates.values()]);
   return { ...match, candidates: match.candidates.slice(0, 5) };
+}
+
+export async function searchCandidates(
+  token: string,
+  source: Song,
+  query: string,
+): Promise<Candidate[]> {
+  const params = new URLSearchParams({ q: query, type: "track", limit: "10" });
+  const data = await spotifyRequest<{
+    tracks?: { items: (SpotifyTrack | null)[] };
+  }>(token, `/search?${params}`);
+  return (data.tracks?.items || []).flatMap((item) => {
+    if (
+      !item ||
+      !/^[A-Za-z0-9]{22}$/.test(item.id) ||
+      item.is_playable === false
+    )
+      return [];
+    return [
+      scoreCandidate(source, {
+        id: item.id,
+        name: item.name,
+        artists: item.artists.map((a) => a.name),
+        album: item.album.name,
+        durationMs: item.duration_ms,
+        cover: item.album.images?.at(-1)?.url,
+        uri: `spotify:track:${item.id}`,
+        url: `https://open.spotify.com/track/${item.id}`,
+      }),
+    ];
+  });
 }
 
 export type TransferResult = {

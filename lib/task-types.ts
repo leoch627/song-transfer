@@ -22,6 +22,10 @@ export type TaskSummary = {
   status: TaskStatus;
   total: number;
   completed: number;
+  aiReviewed: number;
+  aiMatched: number;
+  aiSkipped: number;
+  aiUncertain: number;
   resumeAt: number;
   error: string;
   updatedAt: number;
