@@ -1230,13 +1230,13 @@ export default function TransferApp() {
                       <History size={17} />
                       <strong>
                         {queue.quota
-                          ? `近 24 小时已用 ${queue.quota.used} / ${queue.quota.limit} 次搜索`
-                          : "每日分批，自动续跑"}
+                          ? `近 24 小时已搜索 ${queue.quota.used} 次 · 无本站每日上限`
+                          : "后台匹配，限流后自动续跑"}
                       </strong>
                     </div>
                     <p>
-                      每首歌可能搜索 1～3
-                      次。用完额度会自动等待，已完成的歌曲不再搜索。创建任务后可以关闭网页。
+                      每首歌可能搜索 1～3 次。遇到 Spotify
+                      限流会按返回的等待时间自动重试，已完成的歌曲不再搜索。创建任务后可以关闭网页。
                     </p>
                     {queue.task?.resumeAt ? (
                       <p className="task-resume">
@@ -1898,8 +1898,8 @@ export default function TransferApp() {
           )}
           {queue.quota && (
             <p className="task-quota-summary">
-              近 24 小时：{queue.quota.used} / {queue.quota.limit} 次搜索 ·
-              当前剩余 {queue.quota.remaining} 次
+              近 24 小时已搜索 {queue.quota.used} 次 · 无本站每日上限，按
+              Spotify 限流自动等待
             </p>
           )}
           <div className="task-list">

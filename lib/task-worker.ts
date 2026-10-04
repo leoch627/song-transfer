@@ -48,16 +48,15 @@ export async function runTaskStep(
     store.finish(task, store.nextSong(task) ? "queued" : "complete");
   } catch (error) {
     if (error instanceof AppError && error.status === 429) {
-      if (error.reason !== "LOCAL_BUDGET")
-        store.cooldown(error.retryAfter || 30, error.reason || "RATE_LIMITED");
+      store.cooldown(error.retryAfter || 60, error.reason || "RATE_LIMITED");
       store.finish(
         task,
         "waiting",
         Math.max(
           store.quota().resumeAt,
-          store.now() + (error.retryAfter || 30) * 1000,
+          store.now() + (error.retryAfter || 60) * 1000,
         ),
-        "搜索额度暂不可用，到时自动继续。",
+        "Spotify 暂时限流，进度已保存，到时自动重试。",
       );
     } else if (error instanceof AppError && error.status === 401) {
       store.finish(task, "needs_auth", 0, error.message);

@@ -41,7 +41,6 @@ export class TaskStore {
   constructor(
     path: string,
     readonly now: () => number = Date.now,
-    readonly limit = 400,
   ) {
     if (path !== ":memory:")
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -66,7 +65,28 @@ export class TaskStore {
       CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS web_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS auth_attempts (scope TEXT NOT NULL, at INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS auth_attempts_scope ON auth_attempts(scope,at);`);
+      CREATE INDEX IF NOT EXISTS auth_attempts_scope ON auth_attempts(scope,at);
+      CREATE TABLE IF NOT EXISTS task_migrations (name TEXT PRIMARY KEY);`);
+    this.transaction(() => {
+      const migration = this.db
+        .prepare("INSERT OR IGNORE INTO task_migrations(name) VALUES(?)")
+        .run("spotify-managed-search-limits");
+      if (!migration.changes) return;
+      // Old waiting tasks combined a local daily budget with Spotify's cooldown.
+      // Release only the local wait; all song data and real cooldowns stay intact.
+      const { resumeAt } = this.quota();
+      this.db
+        .prepare(
+          `UPDATE tasks SET status=?,resume_at=?,error=?,updated_at=?
+          WHERE status='waiting'`,
+        )
+        .run(
+          resumeAt ? "waiting" : "queued",
+          resumeAt,
+          resumeAt ? "Spotify 暂时限流，到时自动重试。" : "",
+          this.now(),
+        );
+    });
   }
   transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -82,29 +102,19 @@ export class TaskStore {
   quota(): QuotaStatus {
     const now = this.now();
     const usage = this.db
-      .prepare(
-        "SELECT COUNT(*) AS used, MIN(at) AS first FROM search_usage WHERE at > ?",
-      )
-      .get(now - DAY) as { used: number; first: number | null };
+      .prepare("SELECT COUNT(*) AS used FROM search_usage WHERE at > ?")
+      .get(now - DAY) as { used: number };
     const cooldown = this.db
       .prepare("SELECT until_at, reason FROM search_cooldown WHERE id=1")
       .get() as { until_at: number; reason: string } | undefined;
-    const exhausted = usage.used >= this.limit;
-    const resumeAt = Math.max(
-      exhausted ? (usage.first ?? now) + DAY : 0,
-      cooldown && cooldown.until_at > now ? cooldown.until_at : 0,
-    );
+    const resumeAt =
+      cooldown && cooldown.until_at > now ? cooldown.until_at : 0;
     return {
-      limit: this.limit,
+      limit: null,
       used: usage.used,
-      remaining: Math.max(0, this.limit - usage.used),
+      remaining: null,
       resumeAt,
-      reason:
-        cooldown && cooldown.until_at > now
-          ? cooldown.reason
-          : exhausted
-            ? "LOCAL_BUDGET"
-            : "",
+      reason: resumeAt ? cooldown!.reason : "",
     };
   }
   reserveSearch() {
@@ -112,7 +122,7 @@ export class TaskStore {
       const q = this.quota();
       if (q.resumeAt > this.now())
         throw new AppError(
-          "搜索额度暂不可用，任务会在额度恢复后继续。",
+          "Spotify 暂时限流，任务会在等待结束后自动重试。",
           429,
           Math.max(1, Math.ceil((q.resumeAt - this.now()) / 1000)),
           q.reason,
@@ -415,7 +425,7 @@ export class TaskStore {
       const lease = randomUUID();
       this.db
         .prepare(
-          "UPDATE tasks SET status='running',lease=?,lease_until=?,updated_at=? WHERE id=?",
+          "UPDATE tasks SET status='running',resume_at=0,error='',lease=?,lease_until=?,updated_at=? WHERE id=?",
         )
         .run(lease, now + 120000, now, row.id);
       return { id: row.id, owner: row.owner, lease };

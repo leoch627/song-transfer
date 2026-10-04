@@ -10,9 +10,9 @@ export type TaskStatus =
   | "failed"
   | "complete";
 export type QuotaStatus = {
-  limit: number;
+  limit: null;
   used: number;
-  remaining: number;
+  remaining: null;
   resumeAt: number;
   reason: string;
 };

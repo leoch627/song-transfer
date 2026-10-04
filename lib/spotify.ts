@@ -2,6 +2,20 @@ import { AppError } from "./http";
 import { makeMatch, scoreCandidate } from "./matching";
 import type { Candidate, Song } from "./types";
 
+function retryAfterSeconds(value: string | null) {
+  if (value !== null && /^\d+(\.\d+)?$/.test(value.trim())) {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds)) return Math.max(1, Math.ceil(seconds));
+  }
+  if (value && /[a-z]/i.test(value)) {
+    const deadline = Date.parse(value);
+    if (Number.isFinite(deadline))
+      return Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+  }
+  // A 429 without a usable Retry-After does not establish a 24-hour quota.
+  return 60;
+}
+
 export async function spotifyRequest<T>(
   token: string,
   endpoint: string,
@@ -19,10 +33,7 @@ export async function spotifyRequest<T>(
   if (response.status === 429) {
     const body = await response.json().catch(() => null);
     const quota = body?.error?.reason === "QUOTA_EXCEEDED";
-    const seconds = Math.max(
-      1,
-      Number(response.headers.get("retry-after")) || (quota ? 86400 : 30),
-    );
+    const seconds = retryAfterSeconds(response.headers.get("retry-after"));
     throw new AppError(
       `Spotify 请求额度暂时用完，请至少等待 ${seconds} 秒后继续。`,
       429,
