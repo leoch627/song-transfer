@@ -235,6 +235,7 @@ test("relay receives only song metadata and uses the configured Luna model", asy
             "durationMs",
           ]);
           assert.ok(!JSON.stringify(input).includes("spotify:track:"));
+          assert.equal(input.candidates.length, 1);
           return Response.json(
             style === "responses"
               ? {
@@ -259,8 +260,16 @@ test("relay receives only song metadata and uses the configured Luna model", asy
           );
         },
       );
-      const result = await reviewWithAi(source, [track]);
+      const result = await reviewWithAi(source, [
+        track,
+        {
+          ...track,
+          id: "b".repeat(22),
+          cover: "https://example.com/other-cover.jpg",
+        },
+      ]);
       assert.equal(result.candidateId, track.id);
+      assert.equal(result.reviewVersion, 2);
       spy.mock.restore();
     }
   } finally {

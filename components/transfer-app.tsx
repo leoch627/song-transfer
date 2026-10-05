@@ -41,6 +41,7 @@ import {
   needsAiReview,
   needsArtistResearch,
   visibleCandidates,
+  excludedCandidateDetails,
   reconcileMatch,
   parsePlaylistId,
 } from "@/lib/matching";
@@ -442,6 +443,7 @@ export default function TransferApp() {
   );
   const review = matches.find((m) => m.source.id === reviewId);
   const reviewCandidates = review ? visibleCandidates(review) : [];
+  const excludedCandidates = review ? excludedCandidateDetails(review) : [];
   const aiPending = matches.filter(needsAiReview);
   const aiUnverified = matches.filter(
     (m) =>
@@ -668,6 +670,7 @@ export default function TransferApp() {
         });
         let advice: AiReview;
         let candidates: Candidate[] | undefined;
+        let excludedCandidates: Candidate[] | undefined;
         if (demo) {
           await new Promise((resolve) => setTimeout(resolve, 650));
           advice = {
@@ -690,14 +693,19 @@ export default function TransferApp() {
             },
             controller.current.signal,
           );
-          ({ candidates, ...advice } = response);
+          ({ candidates, excludedCandidates, ...advice } = response);
         }
         if (stop.current) break;
         setMatches((old) =>
           old.map((m) =>
             m.source.id === match.source.id
               ? applyAiReview(
-                  { ...m, candidates: candidates || m.candidates },
+                  {
+                    ...m,
+                    candidates: candidates || m.candidates,
+                    excludedCandidates:
+                      excludedCandidates || m.excludedCandidates,
+                  },
                   advice,
                 )
               : m,
@@ -2309,8 +2317,8 @@ export default function TransferApp() {
             {review.aiSelected
               ? "已选中 AI 确认的版本，并隐藏其他歌手的候选。"
               : "已隐藏烟嗓、翻唱等与原曲不符的版本。"}
-            {review.candidates.length > reviewCandidates.length &&
-              ` 排除 ${review.candidates.length - reviewCandidates.length} 个候选。`}
+            {!!excludedCandidates.length &&
+              ` 已排除 ${excludedCandidates.length} 个候选，可在下方展开查看。`}
           </p>
           <div className="candidates">
             {!reviewCandidates.length && (
@@ -2354,6 +2362,42 @@ export default function TransferApp() {
               </div>
             ))}
           </div>
+          {!!excludedCandidates.length && (
+            <details className="excluded-candidates" key={review.source.id}>
+              <summary>查看已排除候选（{excludedCandidates.length}）</summary>
+              <p className="candidate-intro">
+                这里保留未采用的版本，方便核对。展开查看不会改变当前选择。
+              </p>
+              <div className="candidates">
+                {excludedCandidates.map(({ candidate, reason }) => (
+                  <div className="candidate" key={candidate.id}>
+                    <div>
+                      <h3>{candidate.name}</h3>
+                      <p>
+                        {candidate.artists.join(" / ")} · {candidate.album}
+                      </p>
+                      <span>
+                        匹配分 {candidate.score}
+                        {candidate.durationDiff !== null &&
+                          ` · 时长相差 ${(candidate.durationDiff / 1000).toFixed(1)} 秒`}
+                      </span>
+                      <p className="exclusion-reason">{reason}</p>
+                      {candidate.url && (
+                        <a
+                          href={candidate.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          在 Spotify 查看
+                          <ExternalLink size={12} />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
           <button
             disabled={!!busy || writeStarted}
             className="text-button skip-button"

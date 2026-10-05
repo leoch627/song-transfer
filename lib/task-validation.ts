@@ -89,7 +89,11 @@ export function validateSavedMatch(
     },
     original.source,
   );
-  return match && savedReview ? applyAiReview(match, savedReview) : match;
+  if (!match) return null;
+  // The browser cannot erase or inject the server's excluded candidate archive.
+  if (original.excludedCandidates)
+    match.excludedCandidates = original.excludedCandidates;
+  return savedReview ? applyAiReview(match, savedReview) : match;
 }
 export function validateMatch(value: unknown, source: Song): Match | null {
   const m = value as Match;
@@ -138,6 +142,7 @@ export function validateMatch(value: unknown, source: Song): Match | null {
     checked.reviewedAt = Number.isFinite(m.aiReview.reviewedAt)
       ? m.aiReview.reviewedAt
       : undefined;
+    checked.reviewVersion = m.aiReview.reviewVersion;
     if (typeof m.aiReview.searchWarning === "string")
       checked.searchWarning = m.aiReview.searchWarning.slice(0, 1000);
     const research = m.aiReview.research;

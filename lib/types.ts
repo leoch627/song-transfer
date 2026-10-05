@@ -25,6 +25,7 @@ export type Candidate = Song & {
 export type Match = {
   source: Song;
   candidates: Candidate[];
+  excludedCandidates?: Candidate[];
   selected: Candidate | null;
   status: "pending" | "matched" | "review" | "missing";
   included: boolean;
@@ -40,6 +41,7 @@ export type AiReview = {
   model: string;
   matchKind?: "same_recording" | "original_alternative" | "no_match";
   reviewedAt?: number;
+  reviewVersion?: number;
   research?: ArtistResearch;
   searchWarning?: string;
 };
@@ -50,7 +52,10 @@ export type ArtistResearch = {
   sources: { title: string; url: string }[];
   searchedAt: number;
 };
-export type AiReviewResponse = AiReview & { candidates?: Candidate[] };
+export type AiReviewResponse = AiReview & {
+  candidates?: Candidate[];
+  excludedCandidates?: Candidate[];
+};
 export type AiStatus = {
   configured: boolean;
   model: string;

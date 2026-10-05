@@ -6,11 +6,13 @@ import { join } from "node:path";
 import {
   applyAiReview,
   excludedVersion,
+  excludedCandidateDetails,
   makeMatch,
   needsAiReview,
   normalize,
   scoreCandidate,
   visibleCandidates,
+  uniqueCandidateRecordings,
 } from "../lib/matching";
 import { validateMatch, validateSavedMatch } from "../lib/task-validation";
 import { TaskStore } from "../lib/task-store";
@@ -68,6 +70,124 @@ const legacy: Match = {
   status: "review",
   aiReview: advice,
 };
+
+test("equivalent releases are reviewed once and old duplicate uncertainty is eligible for another review", () => {
+  const duplicate = {
+    ...original,
+    id: "d".repeat(22),
+    cover: "https://example.com/different-cover.jpg",
+  };
+  const remaster = {
+    ...original,
+    id: "r".repeat(22),
+    name: "淚海 (Remastered)",
+  };
+  const shorter = {
+    ...original,
+    id: "s".repeat(22),
+    durationMs: original.durationMs - 1000,
+  };
+  assert.deepEqual(
+    uniqueCandidateRecordings([
+      original,
+      duplicate,
+      cover,
+      remaster,
+      shorter,
+    ]).map((c) => c.id),
+    [original.id, cover.id, remaster.id, shorter.id],
+  );
+  assert.equal(
+    uniqueCandidateRecordings([original, { ...duplicate, album: "" }]).length,
+    2,
+  );
+  const match = applyAiReview(
+    { ...legacy, candidates: [original, duplicate] },
+    { ...advice, decision: "uncertain", candidateId: null },
+  );
+  assert.equal(needsAiReview(match), true);
+  assert.equal(
+    needsAiReview({
+      ...match,
+      aiReview: { ...match.aiReview!, reviewVersion: 2 },
+    }),
+    false,
+  );
+  assert.equal(needsAiReview({ ...match, confirmedByUser: true }), false);
+  assert.equal(
+    applyAiReview(match, { ...advice, reviewVersion: 2 }).selected?.id,
+    original.id,
+  );
+});
+
+test("excluded candidates remain inspectable through re-review and stale browser saves without changing the chosen song", () => {
+  const store = new TaskStore(":memory:");
+  try {
+    const id = store.create(
+      "alice",
+      {
+        id: "p",
+        name: "test",
+        creator: "",
+        total: 1,
+        missing: 0,
+        songs: [source],
+      },
+      [legacy],
+    );
+    const result = store.saveAiReview(id, "alice", 0, {
+      ...advice,
+      candidates: [original],
+    });
+    const saved = store.get(id, "alice").matches[0];
+    const excluded = excludedCandidateDetails(saved);
+    assert.deepEqual(
+      new Set(excluded.map(({ candidate }) => candidate.id)),
+      new Set([smoke.id, cover.id]),
+    );
+    assert.match(
+      excluded.find(({ candidate }) => candidate.id === smoke.id)!.reason,
+      /版本标签/,
+    );
+    assert.match(
+      excluded.find(({ candidate }) => candidate.id === cover.id)!.reason,
+      /此前复核/,
+    );
+    assert.equal(saved.selected?.id, original.id);
+    assert.equal(saved.included, true);
+    assert.deepEqual(result.excludedCandidates, saved.excludedCandidates);
+    const stale = validateSavedMatch(
+      { ...legacy, excludedCandidates: [candidate("x", "fake", "fake", 1)] },
+      saved,
+    )!;
+    store.save(id, "alice", [{ index: 0, match: stale }]);
+    assert.deepEqual(
+      store.get(id, "alice").matches[0].excludedCandidates,
+      saved.excludedCandidates,
+    );
+    store.saveAiReview(id, "alice", 0, { ...advice, candidates: [original] });
+    assert.deepEqual(
+      store.get(id, "alice").matches[0].excludedCandidates,
+      saved.excludedCandidates,
+    );
+
+    const skipped = applyAiReview(legacy, {
+      ...advice,
+      candidateId: null,
+      decision: "skip",
+    });
+    assert.equal(visibleCandidates(skipped).length, 0);
+    assert.equal(excludedCandidateDetails(skipped).length, 3);
+    assert.equal(
+      excludedCandidateDetails(skipped).find(
+        ({ candidate }) => candidate.id === cover.id,
+      )!.reason,
+      "AI 本轮未采纳此候选，具体依据见上方复核说明。",
+    );
+  } finally {
+    store.close();
+  }
+});
 
 test("泪海 selects the web-verified original singer directly and hides covers", () => {
   assert.equal(normalize("淚海"), normalize("泪海"));

@@ -421,9 +421,11 @@ export class TaskStore {
           409,
         );
       const { candidates: incoming, ...review } = result;
+      delete review.excludedCandidates;
       const candidates = [...(incoming || match.candidates)];
       // Preserve a manual selection made while the network request was in flight.
       if (
+        match.confirmedByUser &&
         match.selected &&
         !candidates.some((c) => c.id === match.selected!.id)
       ) {
@@ -434,14 +436,26 @@ export class TaskStore {
           );
         candidates.push(match.selected);
       }
-      const updated = applyAiReview({ ...match, candidates }, review);
+      // Keep candidates removed by filtering or supplemental searches inspectable.
+      const archive = new Map<string, Match["candidates"][number]>();
+      for (const candidate of [
+        ...(match.excludedCandidates || []),
+        ...match.candidates,
+      ])
+        if (!candidates.some((c) => c.id === candidate.id))
+          archive.set(candidate.id, candidate);
+      const excludedCandidates = [...archive.values()];
+      const updated = applyAiReview(
+        { ...match, candidates, excludedCandidates },
+        review,
+      );
       this.db
         .prepare("UPDATE task_songs SET match=? WHERE task_id=? AND position=?")
         .run(JSON.stringify(updated), id, index);
       this.db
         .prepare("UPDATE tasks SET updated_at=? WHERE id=?")
         .run(this.now(), id);
-      return { ...review, candidates };
+      return { ...review, candidates, excludedCandidates };
     });
   }
   beginTransfer(id: string, owner: string) {

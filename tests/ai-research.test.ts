@@ -191,7 +191,7 @@ test("verified original singer alternative is selected, persists with accurate t
       candidates: [track("a")],
     };
     const saved = store.saveAiReview(id, "alice", 0, result);
-    assert.ok(saved.candidates.some((c) => c.id === original.id));
+    assert.ok(saved.excludedCandidates.some((c) => c.id === original.id));
     let task = store.get(id, "alice");
     assert.equal(task.aiReviewed, 1);
     assert.equal(task.aiMatched, 1);

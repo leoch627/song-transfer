@@ -2,6 +2,33 @@ import type { AiReview, Candidate, Match, Song } from "./types";
 import { Converter } from "opencc-js/t2cn";
 
 const simplify = Converter({ from: "t", to: "cn" });
+export const AI_REVIEW_VERSION = 2;
+
+export function uniqueCandidateRecordings(
+  candidates: Candidate[],
+): Candidate[] {
+  const seen = new Set<string>();
+  // Preserve version suffixes: remasters/live recordings must remain separate.
+  const text = (value: string) =>
+    simplify(value.normalize("NFKC")).toLowerCase().replace(/\s+/g, " ").trim();
+  return candidates.filter((candidate) => {
+    if (
+      !candidate.album.trim() ||
+      !candidate.artists.length ||
+      candidate.durationMs <= 0
+    )
+      return true;
+    const key = JSON.stringify([
+      text(candidate.name),
+      candidate.artists.map(text).sort(),
+      text(candidate.album),
+      candidate.durationMs,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 export function normalize(text: string): string {
   return simplify(text.normalize("NFKC"))
@@ -108,6 +135,29 @@ export function visibleCandidates(match: Match): Candidate[] {
       );
   }
   return candidates;
+}
+
+export function excludedCandidateDetails(match: Match) {
+  const visible = new Set(visibleCandidates(match).map((c) => c.id));
+  const current = new Set(match.candidates.map((c) => c.id));
+  const all = new Map<string, Candidate>();
+  for (const candidate of [
+    ...match.candidates,
+    ...(match.excludedCandidates || []),
+  ])
+    if (!all.has(candidate.id)) all.set(candidate.id, candidate);
+  return rankedCandidates(match.source, [...all.values()])
+    .filter((candidate) => !visible.has(candidate.id))
+    .map((candidate) => ({
+      candidate,
+      reason: excludedVersion(match.source, candidate)
+        ? "版本标签与原曲不符，已按版本规则排除。"
+        : !current.has(candidate.id)
+          ? "此前复核的候选，本轮未采用。"
+          : match.aiReview?.decision === "skip"
+            ? "AI 本轮未采纳此候选，具体依据见上方复核说明。"
+            : "歌手与 AI 已选版本不同，已从推荐列表隐藏；不代表已证实是翻唱。",
+    }));
 }
 
 export function needsArtistResearch(source: Song, candidates: Candidate[]) {
@@ -241,6 +291,10 @@ export function needsAiReview(match: Match): boolean {
   return (
     !match.confirmedByUser &&
     (!match.aiReview ||
+      (match.aiReview.decision === "uncertain" &&
+        (match.aiReview.reviewVersion || 0) < AI_REVIEW_VERSION &&
+        uniqueCandidateRecordings(match.candidates).length <
+          match.candidates.length) ||
       (match.aiReview.decision === "match" &&
         match.aiReview.confidence === "high" &&
         !automaticCandidate(match, match.aiReview))) &&
