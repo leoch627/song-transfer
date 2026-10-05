@@ -9,6 +9,19 @@ export class AppError extends Error {
   }
 }
 
+export function retryAfterSeconds(value: string | null) {
+  if (value !== null && /^\d+(\.\d+)?$/.test(value.trim())) {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds)) return Math.max(1, Math.ceil(seconds));
+  }
+  if (value && /[a-z]/i.test(value)) {
+    const deadline = Date.parse(value);
+    if (Number.isFinite(deadline))
+      return Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+  }
+  return 60;
+}
+
 export function appUrl() {
   const url = new URL(process.env.APP_URL || "http://127.0.0.1:3002");
   if (

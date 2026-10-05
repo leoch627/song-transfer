@@ -59,6 +59,7 @@ export type AiReviewResponse = AiReview & {
 export type AiStatus = {
   configured: boolean;
   model: string;
+  concurrency?: number;
   webSearch?: boolean;
 };
 export type AuthStatus = {

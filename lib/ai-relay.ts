@@ -1,6 +1,51 @@
-import { AppError } from "./http";
+import { AppError, retryAfterSeconds } from "./http";
+import { aiConcurrency } from "./ai-config";
+
+type RelayQueue = {
+  active: number;
+  waiting: (() => void)[];
+  cooldownUntil: number;
+};
+const shared = globalThis as typeof globalThis & {
+  songtransferAiQueue?: RelayQueue;
+};
+const queue = (shared.songtransferAiQueue ||= {
+  active: 0,
+  waiting: [],
+  cooldownUntil: 0,
+});
+
+function checkCooldown() {
+  const seconds = Math.ceil((queue.cooldownUntil - Date.now()) / 1000);
+  if (seconds > 0)
+    throw new AppError(
+      `AI 中转站暂时限流，请在 ${seconds} 秒后继续；已有结果已保留。`,
+      429,
+      seconds,
+      "AI_RATE_LIMITED",
+    );
+}
 
 export async function callAi(body: unknown, style: string, timeoutMs = 60000) {
+  checkCooldown();
+  await new Promise<void>((resolve) => {
+    const enter = () => {
+      queue.active++;
+      resolve();
+    };
+    if (queue.active < aiConcurrency()) enter();
+    else queue.waiting.push(enter);
+  });
+  try {
+    checkCooldown();
+    return await requestAi(body, style, timeoutMs);
+  } finally {
+    queue.active--;
+    queue.waiting.shift()?.();
+  }
+}
+
+async function requestAi(body: unknown, style: string, timeoutMs: number) {
   if (!process.env.AI_BASE_URL || !process.env.AI_API_KEY)
     throw new AppError("请先配置 AI 中转站。", 503);
   let base: URL;
@@ -50,11 +95,19 @@ export async function callAi(body: unknown, style: string, timeoutMs = 60000) {
   }
   if (response.status === 401 || response.status === 403)
     throw new AppError("AI 中转站鉴权失败，请检查密钥与模型权限。", 502);
-  if (response.status === 429)
-    throw new AppError(
-      "AI 中转站限流或额度不足，已完成的复核已保留，请稍后继续。",
-      429,
+  if (response.status === 429) {
+    const seconds = retryAfterSeconds(response.headers.get("retry-after"));
+    queue.cooldownUntil = Math.max(
+      queue.cooldownUntil,
+      Date.now() + seconds * 1000,
     );
+    throw new AppError(
+      `AI 中转站限流或额度不足，请在 ${seconds} 秒后继续；已完成的复核已保留。`,
+      429,
+      seconds,
+      "AI_RATE_LIMITED",
+    );
+  }
   if (!response.ok)
     throw new AppError(
       `AI 中转站返回 ${response.status}，请检查模型、接口和工具支持。`,

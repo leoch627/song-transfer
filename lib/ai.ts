@@ -2,11 +2,13 @@ import { AppError } from "./http";
 import type { AiReview, ArtistResearch, Candidate, Song } from "./types";
 import { callAi } from "./ai-relay";
 import { AI_REVIEW_VERSION, uniqueCandidateRecordings } from "./matching";
+import { aiConcurrency, DEFAULT_AI_MODEL } from "./ai-config";
 
 export function aiStatus() {
   return {
     configured: !!process.env.AI_BASE_URL && !!process.env.AI_API_KEY,
-    model: process.env.AI_MODEL || "gpt-5.6-luna",
+    model: process.env.AI_MODEL || DEFAULT_AI_MODEL,
+    concurrency: aiConcurrency(),
     webSearch: process.env.AI_WEB_SEARCH === "1",
   };
 }

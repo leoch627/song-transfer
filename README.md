@@ -33,7 +33,8 @@ node --env-file=.env.local --import tsx scripts/task-worker.ts
 ```dotenv
 AI_BASE_URL=https://api.loe.cx/v1
 AI_API_KEY=你的密钥
-AI_MODEL=gpt-5.6-luna
+AI_MODEL=gpt-6-luna
+AI_REVIEW_CONCURRENCY=3
 AI_API_STYLE=chat_completions
 AI_WEB_SEARCH=1
 ```
@@ -48,8 +49,9 @@ AI_WEB_SEARCH=1
 - 同一歌名、歌手、专辑和时长完全一致的重复发行，复核时合并为一个代表候选，确认匹配后自动任选其一；不会仅因 ID 或封面不同要求手动确认。旧版因重复候选而存疑的歌曲会重新进入待复核列表，已完成进度仍保留。
 - 简繁体歌名统一比较；烟嗓、翻唱、Live、remix 等与原曲不符的版本不参与自动选择。AI 选定后优先展示该艺人的版本。详情中的「查看已排除候选」默认收起，展开可查看未采用版本的歌名、艺人、专辑、排除依据和 Spotify 链接；后续复核移出的旧候选也会保留。中文理由和联网来源仍可查看，手动选择或取消勾选不会被 AI 覆盖。
 - 显示已复核、待复核、本轮进度与当前歌曲；结果可按建议匹配/跳过/不确定筛选，逐首查看理由、时间和来源，也可导出复核报告。后台任务列表显示已保存的三类结果计数。
-- 每首单独请求，可暂停；已保存任务的复核结果直接写入服务器，刷新后跳过已完成歌曲继续。复核批次仍由浏览器发起，需保持网页打开；Spotify 匹配队列则持续后台运行。重新复核会产生新请求。示例模式完全在本地模拟，不调用中转站。
-- 判断仅基于元数据，无法确认音频本身。参考 [Luna 模型文档](https://developers.openai.com/api/docs/models/gpt-5.6-luna)、[结构化输出](https://developers.openai.com/api/docs/guides/structured-outputs)。
+- 默认使用 GPT-6 Luna，每批并发复核 3 首，`AI_REVIEW_CONCURRENCY` 可设 1–5；服务器进程对所有 AI 请求也使用同一上限。显示当前并行处理的歌名，每首完成即单独保存。暂停或出错后停止领取新歌，等待在途请求保存完结果；失败歌曲下次可重试。AI 429 按 `Retry-After`（缺失时 60 秒）提示等待，并暂时阻止该服务器进程继续请求中转站；Spotify 搜索仍沿用持久化的全站 429 等待。
+- 已保存任务刷新后跳过已完成歌曲继续。复核批次仍由浏览器发起，需保持网页打开；Spotify 匹配队列则持续后台运行。重新复核会产生新请求。示例模式完全在本地模拟，不调用中转站。
+- 判断仅基于元数据，无法确认音频本身。参考 [Luna 模型文档](https://developers.openai.com/api/docs/models/gpt-6-luna)、[结构化输出](https://developers.openai.com/api/docs/guides/structured-outputs)。
 
 ## 网易云登录说明
 

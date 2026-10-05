@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { demoMatch, demoPlaylist } from "@/lib/demo";
+import { boundedConcurrency, runConcurrentBatch } from "@/lib/ai-batch";
 import {
   applyAiReview,
   matchesToCsv,
@@ -225,7 +226,8 @@ export default function TransferApp() {
   const [user, setUser] = useState<User | null>(null);
   const [ai, setAi] = useState<AiStatus>({
     configured: false,
-    model: "gpt-5.6-luna",
+    model: "gpt-6-luna",
+    concurrency: 3,
   });
   const [input, setInput] = useState("");
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
@@ -259,7 +261,7 @@ export default function TransferApp() {
     done: number;
     total: number;
     current: string;
-    state: "running" | "paused" | "failed" | "complete";
+    state: "running" | "pausing" | "paused" | "failed" | "complete";
   } | null>(null);
   const stop = useRef(false);
   const controller = useRef<AbortController | null>(null);
@@ -656,72 +658,80 @@ export default function TransferApp() {
       current: "",
       state: "running",
     });
-    let done = 0;
+    const batchController = controller.current;
     try {
       if (!demo && taskId) await queue.save();
-      for (const match of items) {
-        if (stop.current) break;
-        setAiBatch({
-          taskId,
-          done,
-          total: items.length,
-          current: match.source.name,
-          state: "running",
-        });
-        let advice: AiReview;
-        let candidates: Candidate[] | undefined;
-        let excludedCandidates: Candidate[] | undefined;
-        if (demo) {
-          await new Promise((resolve) => setTimeout(resolve, 650));
-          advice = {
-            decision: match.selected?.confident ? "match" : "skip",
-            candidateId: match.selected?.confident ? match.selected.id : null,
-            confidence: "high",
-            reason: match.selected?.confident
-              ? "示例建议：歌名、歌手和时长一致，可保留此候选。"
-              : "示例建议：候选标注 Live，且比原曲长 28 秒，可能是不同的现场录音。建议跳过，或人工确认后再选择。",
-            model: `${ai.model} · 模拟结果`,
-          };
-        } else {
-          const response = await api<AiReviewResponse>(
-            "/api/ai/review",
-            {
-              source: match.source,
-              candidates: match.candidates,
-              taskId,
-              webSearch,
-            },
-            controller.current.signal,
+      const done = await runConcurrentBatch(
+        items,
+        async (match) => {
+          let advice: AiReview;
+          let candidates: Candidate[] | undefined;
+          let excludedCandidates: Candidate[] | undefined;
+          if (demo) {
+            await new Promise((resolve) => setTimeout(resolve, 650));
+            advice = {
+              decision: match.selected?.confident ? "match" : "skip",
+              candidateId: match.selected?.confident ? match.selected.id : null,
+              confidence: "high",
+              reason: match.selected?.confident
+                ? "示例建议：歌名、歌手和时长一致，可保留此候选。"
+                : "示例建议：候选标注 Live，且比原曲长 28 秒，可能是不同的现场录音。建议跳过，或人工确认后再选择。",
+              model: `${ai.model} · 模拟结果`,
+            };
+          } else {
+            const response = await api<AiReviewResponse>(
+              "/api/ai/review",
+              {
+                source: match.source,
+                candidates: match.candidates,
+                taskId,
+                webSearch,
+              },
+              batchController.signal,
+            );
+            ({ candidates, excludedCandidates, ...advice } = response);
+          }
+          // A requested pause drains in-flight results instead of dropping them.
+          if (batchController.signal.aborted)
+            throw new Error("复核已中止，服务器已完成的结果仍会保留。");
+          setMatches((old) =>
+            old.map((m) =>
+              m.source.id === match.source.id
+                ? applyAiReview(
+                    {
+                      ...m,
+                      candidates: candidates || m.candidates,
+                      excludedCandidates:
+                        excludedCandidates || m.excludedCandidates,
+                    },
+                    advice,
+                  )
+                : m,
+            ),
           );
-          ({ candidates, excludedCandidates, ...advice } = response);
-        }
-        if (stop.current) break;
-        setMatches((old) =>
-          old.map((m) =>
-            m.source.id === match.source.id
-              ? applyAiReview(
-                  {
-                    ...m,
-                    candidates: candidates || m.candidates,
-                    excludedCandidates:
-                      excludedCandidates || m.excludedCandidates,
-                  },
-                  advice,
-                )
-              : m,
-          ),
-        );
-        done++;
-        setAiBatch({
-          taskId,
-          done,
-          total: items.length,
-          current: match.source.name,
-          state: "running",
-        });
-      }
+        },
+        {
+          concurrency: boundedConcurrency(ai.concurrency),
+          shouldStop: () => stop.current,
+          onProgress: ({ done, active, lastCompleted, failed }) => {
+            setAiBatch({
+              taskId,
+              done,
+              total: items.length,
+              current: active.length
+                ? active.map((index) => items[index].source.name).join("、")
+                : lastCompleted === null
+                  ? ""
+                  : items[lastCompleted].source.name,
+              state: stop.current || failed ? "pausing" : "running",
+            });
+          },
+        },
+      );
       setAiBatch((old) =>
-        old ? { ...old, state: stop.current ? "paused" : "complete" } : null,
+        old
+          ? { ...old, state: done === items.length ? "complete" : "paused" }
+          : null,
       );
     } catch (error) {
       setAiBatch((old) =>
@@ -1403,7 +1413,12 @@ export default function TransferApp() {
                     </div>
                     <div>
                       <h3>
-                        AI 复核进度<span>{demo ? "示例" : "结果逐首保存"}</span>
+                        AI 复核进度
+                        <span>
+                          {demo
+                            ? "示例"
+                            : `${ai.model} · ${boundedConcurrency(ai.concurrency)} 首并发 · 逐首保存`}
+                        </span>
                       </h3>
                       <p>
                         已复核 {aiReviewed.length} 首 · 待复核{" "}
@@ -1413,7 +1428,7 @@ export default function TransferApp() {
                       </p>
                       <p>
                         {aiBatch?.taskId === taskId
-                          ? `本轮 ${aiBatch.done} / ${aiBatch.total} 首（${Math.round((aiBatch.done / aiBatch.total) * 100)}%） · ${{ running: "正在处理", paused: "已暂停于", failed: "中断于", complete: "最后完成" }[aiBatch.state]}：${aiBatch.current || "准备中"}`
+                          ? `本轮 ${aiBatch.done} / ${aiBatch.total} 首（${Math.round((aiBatch.done / aiBatch.total) * 100)}%） · ${{ running: "正在处理", pausing: "等待在途结果保存", paused: "已暂停于", failed: "中断于", complete: "最后完成" }[aiBatch.state]}：${aiBatch.current || "准备中"}`
                           : lastAiReview?.aiReview?.reviewedAt
                             ? `最近完成：${lastAiReview.source.name} · ${aiDecisionLabels[lastAiReview.aiReview.decision]} · ${new Date(lastAiReview.aiReview.reviewedAt).toLocaleString("zh-CN")}`
                             : "点击下面的结果分类，查看已完成的歌曲和判断理由。"}
@@ -1424,11 +1439,15 @@ export default function TransferApp() {
                         className="ai-button"
                         onClick={() => {
                           stop.current = true;
-                          controller.current?.abort();
+                          setAiBatch((old) =>
+                            old ? { ...old, state: "pausing" } : null,
+                          );
                         }}
                       >
                         <Pause size={13} />
-                        暂停复核
+                        {aiBatch?.state === "pausing"
+                          ? "正在保存结果…"
+                          : "暂停复核"}
                       </button>
                     ) : (
                       <button
@@ -1944,7 +1963,7 @@ export default function TransferApp() {
                 ? `已配置 ${ai.model}，通过你的中转站复核疑似歌曲。`
                 : "在 .env.local 中填写中转站配置后，重启服务即可启用。"}
             </p>
-            <pre className="ai-config">{`AI_BASE_URL=https://api.loe.cx/v1\nAI_API_KEY=你的中转站密钥\nAI_MODEL=gpt-5.6-luna\nAI_API_STYLE=chat_completions`}</pre>
+            <pre className="ai-config">{`AI_BASE_URL=https://api.loe.cx/v1\nAI_API_KEY=你的中转站密钥\nAI_MODEL=gpt-6-luna\nAI_API_STYLE=chat_completions\nAI_REVIEW_CONCURRENCY=3`}</pre>
             <p>
               兼容 Chat Completions 和 Responses，可通过 AI_API_STYLE
               切换。模型名填写中转站实际支持的 ID。密钥只留在服务端；AI
