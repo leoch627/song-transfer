@@ -6,7 +6,7 @@ export type Song = {
   durationMs: number;
   cover?: string;
 };
-export type PlaylistProvider = "netease" | "qq";
+export type PlaylistProvider = "netease" | "qq" | "kugou";
 export type Playlist = {
   // Older saved tasks have no provider and continue to mean NetEase.
   provider?: PlaylistProvider;

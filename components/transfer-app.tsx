@@ -49,6 +49,7 @@ import {
 import {
   detectPlaylistProvider,
   parseQqPlaylistId,
+  parseKugouPlaylistId,
   providerNames,
   qqShortShareUrl,
 } from "@/lib/playlist-source";
@@ -537,7 +538,9 @@ export default function TransferApp() {
     const valid =
       selectedProvider === "qq"
         ? parseQqPlaylistId(input) || qqShortShareUrl(input)
-        : parsePlaylistId(input);
+        : selectedProvider === "kugou"
+          ? parseKugouPlaylistId(input)
+          : parsePlaylistId(input);
     if (!valid) {
       setMessage({
         kind: "error",
@@ -1046,7 +1049,7 @@ export default function TransferApp() {
                 </svg>
               </h1>
               <p>
-                网易云 / QQ 音乐 → Spotify。
+                网易云 / QQ 音乐 / 酷狗 → Spotify。
                 <br />
                 熟悉的旋律，换个地方继续。
               </p>
@@ -1090,9 +1093,9 @@ export default function TransferApp() {
                 </div>
               </div>
               <div
-                className={`floating-service netease-float ${provider === "qq" ? "qq-float" : ""}`}
+                className={`floating-service netease-float ${provider}-float`}
               >
-                {provider === "qq" ? <Music2 /> : <NeteaseMark />}
+                {provider === "netease" ? <NeteaseMark /> : <Music2 />}
               </div>
               <div className="floating-service spotify-float">
                 <SpotifyMark />
@@ -1161,7 +1164,7 @@ export default function TransferApp() {
                 role="group"
                 aria-label="选择音乐来源"
               >
-                {(["netease", "qq"] as const).map((value) => (
+                {(["netease", "qq", "kugou"] as const).map((value) => (
                   <button
                     key={value}
                     type="button"
@@ -1178,7 +1181,7 @@ export default function TransferApp() {
               </div>
               <div className="service-title">
                 <span className={`service-logo ${provider}`}>
-                  {provider === "qq" ? <Music2 size={28} /> : <NeteaseMark />}
+                  {provider === "netease" ? <NeteaseMark /> : <Music2 size={28} />}
                 </span>
                 <div>
                   <h2>{inputSourceName}</h2>
@@ -1202,7 +1205,9 @@ export default function TransferApp() {
                   placeholder={
                     provider === "qq"
                       ? "y.qq.com/n/ryqq/playlist/…"
-                      : "music.163.com/playlist?id=…"
+                      : provider === "kugou"
+                        ? "酷狗公开歌单链接或数字 ID"
+                        : "music.163.com/playlist?id=…"
                   }
                   value={input}
                   onChange={(event) => {
@@ -1233,12 +1238,14 @@ export default function TransferApp() {
                     setInput(
                       provider === "qq"
                         ? "https://y.qq.com/n/ryqq/playlist/7799808010"
-                        : "13586645289",
+                        : provider === "kugou"
+                          ? "https://www.kugou.com/yy/special/single/8944261.html"
+                          : "13586645289",
                     );
                   }}
                   disabled={!!busy}
                 >
-                  {provider === "qq" ? "填入公开歌单" : "填入你的歌单"}
+                  {provider === "netease" ? "填入你的歌单" : "填入公开歌单"}
                   <ArrowUpRight size={12} />
                 </button>
               </div>
@@ -2077,10 +2084,10 @@ export default function TransferApp() {
             </p>
           </div>
           <div className="settings-netease">
-            <h3>网易云 / QQ 音乐</h3>
+            <h3>网易云 / QQ 音乐 / 酷狗</h3>
             <p>
               选择来源后粘贴公开歌单链接或数字 ID，无需登录来源平台。QQ
-              音乐支持公开歌单，私密歌单和未公开的「我喜欢」请先复制到公开歌单再导入。
+              音乐和酷狗支持公开歌单，私密歌单和未公开的「我喜欢」请先复制到公开歌单再导入。
             </p>
           </div>
         </Modal>
@@ -2128,7 +2135,7 @@ export default function TransferApp() {
             <div>
               <span>01</span>
               <section>
-                <h3>复制网易云或 QQ 音乐公开歌单链接</h3>
+                <h3>复制网易云、QQ 音乐或酷狗公开歌单链接</h3>
                 <p>
                   打开歌单，选择分享并复制链接。选择对应来源后，也可以直接输入歌单数字
                   ID。私密歌单请先调整公开状态。

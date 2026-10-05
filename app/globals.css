@@ -854,6 +854,11 @@ main {
   background: #edf7e8;
   color: #248a58;
 }
+.service-logo.kugou,
+.floating-service.kugou-float {
+  background: #eaf3ff;
+  color: #2679ca;
+}
 .source-selector {
   display: flex;
   gap: 4px;
@@ -864,7 +869,8 @@ main {
 }
 .source-selector button {
   flex: 1;
-  padding: 8px 10px;
+  min-width: 0;
+  padding: 8px 4px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
