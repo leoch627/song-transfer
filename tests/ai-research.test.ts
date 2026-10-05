@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { needsArtistResearch, parseResearch } from "../lib/ai-research";
+import { needsArtistResearch, parseResearch, researchArtist } from "../lib/ai-research";
 import { reviewSong } from "../lib/ai-review-service";
 import {
   applyAiReview,
@@ -241,5 +241,39 @@ test("verified original singer alternative is selected, persists with accurate t
     );
   } finally {
     store.close();
+  }
+});
+
+test("research retries missing evidence once, accepts only retrieved sources, and never retries 429", async (t) => {
+  const old = { key: process.env.AI_API_KEY, base: process.env.AI_BASE_URL };
+  process.env.AI_API_KEY = "test";
+  process.env.AI_BASE_URL = "https://relay.example/v1";
+  const response = (retrieved: string[]) => Response.json({
+    status: "completed", output: [
+      { type: "web_search_call", status: "completed", action: { sources: retrieved.map((url) => ({ url })) } },
+      { type: "message", content: [{ type: "output_text", text: JSON.stringify(research) }] },
+    ],
+  });
+  let calls = 0;
+  const mocked = t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    calls++;
+    const body = JSON.parse(String(init.body));
+    if (calls === 2) assert.match(body.instructions, /上次没有返回/);
+    return response(calls === 1 ? [] : [research.sources[0].url]);
+  });
+  try {
+    assert.deepEqual((await researchArtist(source, [track("a")])).sources, research.sources);
+    assert.equal(calls, 2);
+    calls = 0;
+    mocked.mock.mockImplementation(async () => { calls++; return response(["https://unrelated.example/"]); });
+    await assert.rejects(researchArtist(source, []), { reason: "AI_RESEARCH_NO_SOURCES" });
+    assert.equal(calls, 2);
+    calls = 0;
+    mocked.mock.mockImplementation(async () => { calls++; return new Response(null, { status: 429, headers: { "Retry-After": "3" } }); });
+    await assert.rejects(researchArtist(source, []), { status: 429, retryAfter: 3 });
+    assert.equal(calls, 1);
+  } finally {
+    if (old.key === undefined) delete process.env.AI_API_KEY; else process.env.AI_API_KEY = old.key;
+    if (old.base === undefined) delete process.env.AI_BASE_URL; else process.env.AI_BASE_URL = old.base;
   }
 });

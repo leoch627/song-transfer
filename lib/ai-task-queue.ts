@@ -28,6 +28,16 @@ export class AiTaskQueue {
       lease TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY(task_id,position));
       CREATE TABLE IF NOT EXISTS ai_cooldown (id INTEGER PRIMARY KEY CHECK(id=1), until_at INTEGER NOT NULL);`);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const columns = db.prepare("PRAGMA table_info(ai_job_songs)").all() as { name: string }[];
+      if (!columns.some((c) => c.name === "error"))
+        db.exec("ALTER TABLE ai_job_songs ADD COLUMN error TEXT NOT NULL DEFAULT ''");
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
   summary(id: string): AiJobSummary | null {
     const db = this.store.db;
@@ -49,12 +59,16 @@ export class AiTaskQueue {
       WHERE j.task_id=? AND j.state='running' AND j.lease_until>? ORDER BY j.position`,
       )
       .all(id, this.store.now()) as { name: string }[];
+    const blocked = db.prepare(`SELECT j.position AS 'index', json_extract(s.source,'$.name') AS name,j.error
+      FROM ai_job_songs j JOIN task_songs s ON s.task_id=j.task_id AND s.position=j.position
+      WHERE j.task_id=? AND j.state='blocked' ORDER BY j.position`).all(id) as AiJobSummary["blocked"];
     return {
       status: row.status,
       ...counts,
       current: active.map((s) => s.name),
       resumeAt: row.resume_at,
       error: row.error,
+      blocked,
     };
   }
   touch(id: string) {
@@ -84,7 +98,7 @@ export class AiTaskQueue {
       if (!positions.length && (!old || old.completed === old.total))
         throw new AppError("没有待复核的歌曲。", 400);
       // A finished batch starts a fresh counter; paused/failed batches retain checkpoints.
-      if (old?.status === "complete")
+      if (old?.status === "complete" && !old.blocked.length)
         db.prepare("DELETE FROM ai_jobs WHERE task_id=?").run(id);
       db.prepare(
         `INSERT INTO ai_jobs(task_id,status) VALUES(?,'queued') ON CONFLICT(task_id)
@@ -92,10 +106,13 @@ export class AiTaskQueue {
       ).run(id);
       const insert =
         db.prepare(`INSERT INTO ai_job_songs(task_id,position,force_search) VALUES(?,?,?)
-        ON CONFLICT(task_id,position) DO UPDATE SET state='pending',force_search=excluded.force_search
-        WHERE ai_job_songs.state='done' AND ?=1`);
+        ON CONFLICT(task_id,position) DO UPDATE SET state='pending',force_search=excluded.force_search,error=''
+        WHERE ai_job_songs.state IN ('done','blocked') AND ?=1`);
       for (const index of new Set(positions))
         insert.run(id, index, Number(forceSearch), Number(!!indices));
+      // Only an explicit user resume retries evidence-blocked songs. Normal claims skip them.
+      if (!indices)
+        db.prepare("UPDATE ai_job_songs SET state='pending',error='' WHERE task_id=? AND state='blocked'").run(id);
       const cooldown = db
         .prepare("SELECT until_at FROM ai_cooldown WHERE id=1")
         .get() as { until_at: number } | undefined;
@@ -137,7 +154,7 @@ export class AiTaskQueue {
           `SELECT j.task_id AS taskId,j.position AS idx,t.owner,s.match,j.force_search AS forceSearch
         FROM ai_job_songs j JOIN ai_jobs a ON a.task_id=j.task_id JOIN tasks t ON t.id=j.task_id
         JOIN task_songs s ON s.task_id=j.task_id AND s.position=j.position
-        WHERE a.status IN ('queued','running','waiting') AND a.resume_at<=? AND j.state!='done' AND j.lease_until<=?
+        WHERE a.status IN ('queued','running','waiting') AND a.resume_at<=? AND j.state IN ('pending','running') AND j.lease_until<=?
         AND COALESCE(json_extract(t.workspace,'$.writeStarted'),0)=0
         ORDER BY t.updated_at,j.position LIMIT 1`,
         )
@@ -153,7 +170,7 @@ export class AiTaskQueue {
       if (!item) return null;
       const lease = randomUUID();
       db.prepare(
-        "UPDATE ai_job_songs SET state='running',lease=?,lease_until=? WHERE task_id=? AND position=?",
+        "UPDATE ai_job_songs SET state='running',lease=?,lease_until=?,error='' WHERE task_id=? AND position=?",
       ).run(lease, now + LEASE_MS, item.taskId, item.idx);
       db.prepare(
         "UPDATE ai_jobs SET status='running',resume_at=0,error='' WHERE task_id=?",
@@ -182,33 +199,36 @@ export class AiTaskQueue {
       const db = this.store.db;
       const saved = db
         .prepare(
-          "UPDATE ai_job_songs SET state='done',lease='',lease_until=0 WHERE task_id=? AND position=? AND lease=? AND state='running'",
+          "UPDATE ai_job_songs SET state='done',lease='',lease_until=0,error='' WHERE task_id=? AND position=? AND lease=? AND state='running'",
         )
         .run(item.taskId, item.index, item.lease);
       if (!saved.changes)
         throw new AppError("复核任务已被其他工作进程接管。", 409);
-      const pending = db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM ai_job_songs WHERE task_id=? AND state!='done'",
-        )
-        .get(item.taskId) as { n: number };
-      if (!pending.n)
-        db.prepare(
-          "UPDATE ai_jobs SET status='complete',error='',resume_at=0 WHERE task_id=?",
-        ).run(item.taskId);
+      this.finishIfDrained(item.taskId);
       this.touch(item.taskId);
     });
+  }
+  private finishIfDrained(id: string) {
+    this.store.db.prepare(`UPDATE ai_jobs SET status='complete',error='',resume_at=0 WHERE task_id=?
+      AND NOT EXISTS (SELECT 1 FROM ai_job_songs WHERE task_id=? AND state IN ('pending','running'))`).run(id, id);
   }
   fail(item: AiClaim, error: unknown) {
     this.store.transaction(() => {
       const db = this.store.db;
+      const known = error instanceof AppError;
+      const noEvidence = known && error.reason === "AI_RESEARCH_NO_SOURCES";
       const released = db
         .prepare(
-          "UPDATE ai_job_songs SET state='pending',lease='',lease_until=0 WHERE task_id=? AND position=? AND lease=?",
+          "UPDATE ai_job_songs SET state=?,lease='',lease_until=0,error=? WHERE task_id=? AND position=? AND lease=? AND state='running'",
         )
-        .run(item.taskId, item.index, item.lease);
+        .run(noEvidence ? "blocked" : "pending", known ? error.message : "AI 请求未完成，请重试。", item.taskId, item.index, item.lease);
       if (!released.changes) return;
-      const known = error instanceof AppError;
+      if (noEvidence) {
+        // Preserve the song's existing result/manual selection; a failed research is not a review.
+        this.finishIfDrained(item.taskId);
+        this.touch(item.taskId);
+        return;
+      }
       const wait = known && error.status === 429;
       const resume = wait
         ? this.store.now() + (error.retryAfter || 60) * 1000
@@ -226,9 +246,9 @@ export class AiTaskQueue {
             ? "needs_auth"
             : "failed",
         resume,
-        known
+        `《${item.match.source.name}》：${known
           ? error.message
-          : "AI 请求未完成，已保存进度，点击继续复核可重试。",
+          : "AI 请求未完成，已保存进度，点击继续复核可重试。"}`,
         item.taskId,
       );
       this.touch(item.taskId);

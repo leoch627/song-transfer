@@ -32,6 +32,7 @@ export type TaskSummary = {
   updatedAt: number;
 };
 export type AiJobSummary = {
+  blocked: { index: number; name: string; error: string }[];
   status:
     | "queued"
     | "running"

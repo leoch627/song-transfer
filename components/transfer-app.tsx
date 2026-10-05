@@ -481,6 +481,10 @@ export default function TransferApp() {
     ? Math.round((aiReviewed.length / aiTotal) * 100)
     : 0;
   const serverAiJob = !demo ? queue.task?.aiJob : null;
+  const serverAiBlocked = serverAiJob?.blocked || [];
+  const serverAiPending = serverAiJob
+    ? Math.max(0, serverAiJob.total - serverAiJob.completed - serverAiBlocked.length)
+    : 0;
   const serverAiActive =
     !!serverAiJob &&
     ["queued", "running", "waiting"].includes(serverAiJob.status);
@@ -1510,14 +1514,14 @@ export default function TransferApp() {
                         </span>
                       </h3>
                       <p>
-                        已复核 {aiReviewed.length} 首 · 待复核{" "}
-                        {aiPending.length} 首
+                        已有复核结果 {aiReviewed.length} 首 · {serverAiJob ? "本轮待处理" : "待复核"}{" "}
+                        {serverAiJob ? serverAiPending : aiPending.length} 首
                         {savedAiCount !== undefined &&
                           ` · 服务器已保存 ${savedAiCount} 首`}
                       </p>
                       <p>
                         {serverAiJob
-                          ? `后台复核 ${serverAiJob.completed} / ${serverAiJob.total} 首 · ${aiJobLabels[serverAiJob.status]}${serverAiJob.current.length ? `：${serverAiJob.current.join("、")}` : ""}${serverAiJob.resumeAt ? ` · ${new Date(serverAiJob.resumeAt).toLocaleString("zh-CN")} 后自动继续` : ""}`
+                          ? `本轮已处理 ${serverAiJob.completed + serverAiBlocked.length} / ${serverAiJob.total} 首（结果已保存 ${serverAiJob.completed} 首 · 证据不足 ${serverAiBlocked.length} 首） · ${aiJobLabels[serverAiJob.status]}${serverAiJob.current.length ? `：${serverAiJob.current.join("、")}` : ""}${serverAiJob.resumeAt ? ` · ${new Date(serverAiJob.resumeAt).toLocaleString("zh-CN")} 后自动继续` : ""}`
                           : aiBatch?.taskId === taskId
                             ? `本轮 ${aiBatch.done} / ${aiBatch.total} 首（${Math.round((aiBatch.done / aiBatch.total) * 100)}%） · ${{ running: "正在处理", pausing: "等待在途结果保存", paused: "已暂停于", failed: "中断于", complete: "最后完成" }[aiBatch.state]}：${aiBatch.current || "准备中"}`
                             : lastAiReview?.aiReview?.reviewedAt
@@ -1570,6 +1574,8 @@ export default function TransferApp() {
                         <Sparkles size={13} />
                         {demo
                           ? "体验 AI 复核"
+                          : serverAiBlocked.length && !serverAiPending
+                            ? "重试证据不足的歌曲"
                           : aiReviewed.length
                             ? "继续复核未处理歌曲"
                             : "AI 复核疑似歌曲"}
@@ -1579,6 +1585,22 @@ export default function TransferApp() {
                       AI
                       确认后自动选择并勾选，烟嗓等不符版本会排除。歌手别名先联网核实；后台复核可在关闭网页后继续，回来后自动同步进度和结果。
                     </span>
+                    {serverAiBlocked.length > 0 && (
+                      <details className="ai-evidence-errors">
+                        <summary>查看证据不足的 {serverAiBlocked.length} 首歌曲</summary>
+                        <p>已自动重试一次，仍没有可核验来源。这些歌曲保留原有结果，本次没有通过新结论；其他歌曲继续处理。</p>
+                        <ul>
+                          {serverAiBlocked.map((item) => (
+                            <li key={item.index}>
+                              <button className="text-button" onClick={() => {
+                                const match = matches[item.index];
+                                if (match) setReviewId(match.source.id);
+                              }}>《{item.name}》</button>：{item.error}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
                   </div>
                 )}
                 {completed > 0 && (
@@ -2266,7 +2288,7 @@ export default function TransferApp() {
                 </p>
                 {item.aiJob && (
                   <p>
-                    AI 本轮 {item.aiJob.completed} / {item.aiJob.total} 首 ·{" "}
+                    AI 本轮已处理 {item.aiJob.completed + (item.aiJob.blocked?.length || 0)} / {item.aiJob.total} 首 · 证据不足 {item.aiJob.blocked?.length || 0} 首 ·{" "}
                     {aiJobLabels[item.aiJob.status]}
                     {item.aiJob.current.length
                       ? `：${item.aiJob.current.join("、")}`

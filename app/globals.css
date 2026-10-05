@@ -859,6 +859,25 @@ main {
   background: #eaf3ff;
   color: #2679ca;
 }
+.ai-evidence-errors {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e4d8bc;
+  border-radius: 8px;
+  color: #85653c;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ai-evidence-errors summary {
+  cursor: pointer;
+}
+.ai-evidence-errors p,
+.ai-evidence-errors ul {
+  margin: 8px 0 0;
+}
+.ai-evidence-errors li + li {
+  margin-top: 6px;
+}
 .source-selector {
   display: flex;
   gap: 4px;

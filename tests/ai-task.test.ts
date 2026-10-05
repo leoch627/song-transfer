@@ -231,3 +231,74 @@ test("transfer waits for AI jobs and manual changes made after selection remain 
     store.close();
   }
 });
+
+test("evidence failures do not block other songs, preserve old results and persist until explicit retry", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "songshift-evidence-"));
+  let store = new TaskStore(join(dir, "tasks.sqlite"));
+  try {
+    const id = create(store, 3);
+    store.saveAiReview(id, "alice", 0, result);
+    const previous = store.get(id, "alice").matches[0];
+    let queue = new AiTaskQueue(store);
+    queue.start(id, "alice", [0, 1, 2], true);
+    const completed = queue.claim(3)!, blocked = queue.claim(3)!;
+    queue.complete(blocked, result);
+    // Failure of an older review must not overwrite that saved review.
+    queue.fail(completed, new AppError("没有来源", 502, undefined, "AI_RESEARCH_NO_SOURCES"));
+    assert.deepEqual(store.get(id, "alice").matches[0], previous);
+    assert.equal(queue.summary(id)?.status, "running");
+    assert.deepEqual(queue.summary(id)?.blocked.map((s) => ({ ...s })), [{ index: 0, name: "晴天", error: "没有来源" }]);
+    await runAiTaskStep(store, { token: async () => "token", review: async () => result });
+    assert.equal(queue.summary(id)?.status, "complete");
+    assert.equal(queue.summary(id)?.completed, 2);
+    assert.equal(queue.claim(3), null);
+    store.close(); store = new TaskStore(join(dir, "tasks.sqlite")); queue = new AiTaskQueue(store);
+    assert.equal(queue.summary(id)?.blocked.length, 1);
+    assert.equal(queue.claim(3), null);
+    queue.start(id, "alice");
+    const retry = queue.claim(3)!;
+    assert.equal(retry.index, 0);
+    assert.equal(queue.summary(id)?.blocked.length, 0);
+    assert.equal(queue.summary(id)?.completed, 2);
+    queue.complete(retry, result);
+    assert.equal(queue.summary(id)?.status, "complete");
+    assert.equal(queue.summary(id)?.completed, 3);
+    assert.equal(queue.claim(3), null);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("evidence failures preserve a user's pause and cannot erase a concurrent rate limit", () => {
+  const store = new TaskStore(":memory:");
+  try {
+    const id = create(store, 3), queue = new AiTaskQueue(store);
+    queue.start(id, "alice");
+    const first = queue.claim(3)!, second = queue.claim(3)!;
+    queue.fail(first, new AppError("限流", 429, 30));
+    const until = queue.summary(id)?.resumeAt;
+    queue.fail(second, new AppError("没有来源", 502, undefined, "AI_RESEARCH_NO_SOURCES"));
+    assert.equal(queue.summary(id)?.status, "waiting");
+    assert.equal(queue.summary(id)?.resumeAt, until);
+    queue.pause(id, "alice");
+    assert.equal(queue.claim(3), null);
+    queue.start(id, "alice", [second.index], true);
+    assert.equal(queue.summary(id)?.status, "waiting");
+    assert.equal(queue.summary(id)?.blocked.length, 0);
+  } finally { store.close(); }
+});
+
+test("legacy AI queue schema upgrades without changing pending songs, completed reviews or failure status", () => {
+  const dir = mkdtempSync(join(tmpdir(), "songshift-ai-schema-"));
+  let store = new TaskStore(join(dir, "tasks.sqlite"));
+  try {
+    const id = create(store, 2), queue = new AiTaskQueue(store);
+    queue.start(id, "alice");
+    queue.complete(queue.claim(3)!, result);
+    queue.fail(queue.claim(3)!, new AppError("没有来源", 502));
+    const saved = store.get(id, "alice");
+    store.db.exec("ALTER TABLE ai_job_songs DROP COLUMN error");
+    const before = store.db.prepare("SELECT * FROM ai_job_songs").all();
+    store.close(); store = new TaskStore(join(dir, "tasks.sqlite"));
+    assert.deepEqual(store.db.prepare("SELECT task_id,position,state,force_search,lease,lease_until FROM ai_job_songs").all(), before);
+    assert.deepEqual(store.get(id, "alice"), saved);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
