@@ -1,7 +1,7 @@
 import { aiStatus, reviewWithAi } from "./ai";
 import { needsArtistResearch, researchArtist } from "./ai-research";
 import { AppError } from "./http";
-import { normalize } from "./matching";
+import { excludedVersion, normalize, rankedCandidates } from "./matching";
 import { searchCandidates } from "./spotify";
 import type { TaskStore } from "./task-store";
 import type { AiReviewResponse, Candidate, Song } from "./types";
@@ -21,6 +21,9 @@ export async function reviewSong(
     review: reviewWithAi,
   },
 ): Promise<AiReviewResponse> {
+  candidates = rankedCandidates(source, candidates).filter(
+    (c) => !excludedVersion(source, c),
+  );
   const needsSearch =
     options.forceSearch || needsArtistResearch(source, candidates);
   const research =
@@ -75,7 +78,9 @@ export async function reviewSong(
       ...candidates.slice(1),
     ])
       if (!merged.has(c.id)) merged.set(c.id, c);
-    selectedCandidates = [...merged.values()].slice(0, 5);
+    selectedCandidates = [...merged.values()]
+      .filter((c) => !excludedVersion(source, c))
+      .slice(0, 5);
   }
   const review = await dependencies.review(
     source,

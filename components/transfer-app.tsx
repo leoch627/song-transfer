@@ -40,6 +40,8 @@ import {
   matchesToCsv,
   needsAiReview,
   needsArtistResearch,
+  visibleCandidates,
+  reconcileMatch,
   parsePlaylistId,
 } from "@/lib/matching";
 import type {
@@ -60,8 +62,8 @@ import type { User } from "@/lib/accounts";
 type Tab = "all" | Match["status"];
 type AiFilter = "all" | "reviewed" | "pending" | AiReview["decision"];
 const aiDecisionLabels = {
-  match: "建议匹配",
-  skip: "建议跳过",
+  match: "复核通过",
+  skip: "已排除",
   uncertain: "仍不确定",
 };
 type Saved = {
@@ -329,7 +331,11 @@ export default function TransferApp() {
               (!data.accountId || data.accountId === account?.id)
             ) {
               setPlaylist(data.playlist);
-              setMatches(data.matches);
+              setMatches(
+                data.writeStarted
+                  ? data.matches
+                  : data.matches.map(reconcileMatch),
+              );
               setDemo(data.demo);
               setName(data.name);
               setResult(data.result);
@@ -435,6 +441,7 @@ export default function TransferApp() {
         .includes(query.toLocaleLowerCase()),
   );
   const review = matches.find((m) => m.source.id === reviewId);
+  const reviewCandidates = review ? visibleCandidates(review) : [];
   const aiPending = matches.filter(needsAiReview);
   const aiUnverified = matches.filter(
     (m) =>
@@ -621,6 +628,7 @@ export default function TransferApp() {
               included: true,
               status: "matched",
               confirmedByUser: true,
+              aiSelected: false,
             }
           : m,
       ),
@@ -1429,7 +1437,8 @@ export default function TransferApp() {
                       </button>
                     )}
                     <span className="ai-data-note">
-                      歌手或歌名不一致时联网核实别名、原唱及简繁体写法。请保持网页打开；刷新后可继续剩余歌曲，建议需你确认。
+                      AI
+                      确认后自动选择并勾选，烟嗓等不符版本会排除。歌手别名先联网核实；请保持网页打开，刷新后可继续剩余歌曲。
                     </span>
                   </div>
                 )}
@@ -1458,8 +1467,8 @@ export default function TransferApp() {
                           ["all", "全部歌曲", matches.length],
                           ["reviewed", "已复核", aiReviewed.length],
                           ["pending", "待复核", aiPending.length],
-                          ["match", "建议匹配", aiCounts.match],
-                          ["skip", "建议跳过", aiCounts.skip],
+                          ["match", "复核通过", aiCounts.match],
+                          ["skip", "已排除", aiCounts.skip],
                           ["uncertain", "仍不确定", aiCounts.uncertain],
                         ] as const
                       ).map(([key, label, count]) => (
@@ -1489,7 +1498,9 @@ export default function TransferApp() {
                       )}
                     </div>
                     <p>
-                      “建议匹配”不会自动勾选待确认歌曲；“原唱替代”需单独确认版本。
+                      已自动选择{" "}
+                      {matches.filter((m) => m.aiSelected && m.included).length}{" "}
+                      首。高把握且依据充分时直接选中；原唱替代会单独标注，不确定的歌曲暂不勾选。
                     </p>
                   </section>
                 )}
@@ -1560,7 +1571,12 @@ export default function TransferApp() {
                               setMatches((old) =>
                                 old.map((m) =>
                                   m.status === "matched"
-                                    ? { ...m, included: event.target.checked }
+                                    ? {
+                                        ...m,
+                                        included: event.target.checked,
+                                        confirmedByUser: true,
+                                        aiSelected: false,
+                                      }
                                     : m,
                                 ),
                               )
@@ -1598,6 +1614,8 @@ export default function TransferApp() {
                                         ? {
                                             ...m,
                                             included: event.target.checked,
+                                            confirmedByUser: true,
+                                            aiSelected: false,
                                           }
                                         : m,
                                     ),
@@ -1673,10 +1691,17 @@ export default function TransferApp() {
                                   title={match.aiReview.reason}
                                 >
                                   <Sparkles size={12} />
-                                  {match.aiReview.matchKind ===
-                                  "original_alternative"
-                                    ? "原唱替代 · 待确认"
-                                    : aiDecisionLabels[match.aiReview.decision]}
+                                  {match.aiSelected
+                                    ? match.aiReview.matchKind ===
+                                      "original_alternative"
+                                      ? "AI 已选 · 原唱替代"
+                                      : "AI 已自动选择"
+                                    : match.aiReview.matchKind ===
+                                        "original_alternative"
+                                      ? "原唱替代 · 待确认"
+                                      : aiDecisionLabels[
+                                          match.aiReview.decision
+                                        ]}
                                 </button>
                               )}
                             </td>
@@ -1715,7 +1740,7 @@ export default function TransferApp() {
                 <div className="table-bottom">
                   <span>
                     <Info size={13} />
-                    「待确认」的歌曲需手动选择版本后才会迁移
+                    AI 已确认的歌曲自动勾选；其余可继续联网复核或手动选择
                   </span>
                   <button
                     className="text-button"
@@ -2094,7 +2119,7 @@ export default function TransferApp() {
                   {item.id === taskId ? " · 当前任务" : ""}
                 </p>
                 <p>
-                  AI 已复核 {item.aiReviewed || 0} 首 · 建议匹配{" "}
+                  AI 已复核 {item.aiReviewed || 0} 首 · 复核通过{" "}
                   {item.aiMatched || 0} · 跳过 {item.aiSkipped || 0} · 不确定{" "}
                   {item.aiUncertain || 0}
                 </p>
@@ -2212,8 +2237,10 @@ export default function TransferApp() {
               <>
                 <p>
                   <strong>
-                    {review.aiReview.matchKind === "original_alternative"
-                      ? "原唱替代版本 · 不是原曲录音，需确认"
+                    {review.aiSelected
+                      ? review.aiReview.matchKind === "original_alternative"
+                        ? "已自动选择原唱替代版本 · 非原曲录音"
+                        : "AI 已自动选择并勾选"
                       : aiDecisionLabels[review.aiReview.decision]}
                   </strong>
                 </p>
@@ -2260,25 +2287,38 @@ export default function TransferApp() {
                 </span>
                 {review.aiReview.candidateId && (
                   <p>
-                    建议候选：
+                    {review.aiSelected ? "已选择：" : "复核候选："}
                     {
                       review.candidates.find(
                         (c) => c.id === review.aiReview?.candidateId,
                       )?.name
                     }
-                    。请在下方选择后确认。
+                    {review.aiSelected
+                      ? "。已加入待迁移歌曲。"
+                      : review.confirmedByUser
+                        ? "。保留你的手动选择。"
+                        : "。证据或把握不足时暂不自动选中，可继续联网复核。"}
                   </p>
                 )}
               </>
             ) : (
-              <p>核对艺人别名、不同语言的歌名和录音版本，仅提供建议。</p>
+              <p>核对艺人别名、简繁体歌名和录音版本，确认后自动选择。</p>
             )}
           </div>
           <p className="candidate-intro">
-            对照歌手和版本，选择你想带走的那一首。分数是规则评分，不是匹配概率。
+            {review.aiSelected
+              ? "已选中 AI 确认的版本，并隐藏其他歌手的候选。"
+              : "已隐藏烟嗓、翻唱等与原曲不符的版本。"}
+            {review.candidates.length > reviewCandidates.length &&
+              ` 排除 ${review.candidates.length - reviewCandidates.length} 个候选。`}
           </p>
           <div className="candidates">
-            {review.candidates.map((candidate) => (
+            {!reviewCandidates.length && (
+              <p className="candidate-intro">
+                暂未找到可用的原版，AI 不会拿不符版本凑数。
+              </p>
+            )}
+            {reviewCandidates.map((candidate) => (
               <div className="candidate" key={candidate.id}>
                 <div>
                   <h3>{candidate.name}</h3>
@@ -2299,11 +2339,17 @@ export default function TransferApp() {
                 </div>
                 <button
                   className="secondary-button"
-                  disabled={!!busy || writeStarted}
+                  disabled={
+                    !!busy ||
+                    writeStarted ||
+                    (review.included && review.selected?.id === candidate.id)
+                  }
                   onClick={() => chooseCandidate(candidate)}
                 >
                   <Check size={14} />
-                  选择此版本
+                  {review.included && review.selected?.id === candidate.id
+                    ? "已选择"
+                    : "改用此版本"}
                 </button>
               </div>
             ))}
@@ -2315,7 +2361,12 @@ export default function TransferApp() {
               setMatches((old) =>
                 old.map((m) =>
                   m.source.id === reviewId
-                    ? { ...m, included: false, confirmedByUser: true }
+                    ? {
+                        ...m,
+                        included: false,
+                        confirmedByUser: true,
+                        aiSelected: false,
+                      }
                     : m,
                 ),
               );

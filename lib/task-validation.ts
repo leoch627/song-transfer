@@ -1,5 +1,5 @@
 import { AppError } from "./http";
-import { makeMatch, scoreCandidate } from "./matching";
+import { applyAiReview, makeMatch, scoreCandidate } from "./matching";
 import { validateReview } from "./ai";
 import { safeSourceUrl } from "./ai-research";
 import type { Candidate, Match, Playlist, Song } from "./types";
@@ -61,6 +61,36 @@ function safeCover(value: unknown) {
     ? value
     : undefined;
 }
+export function validateSavedMatch(
+  value: unknown,
+  original: Match,
+): Match | null {
+  const incoming = value as Match;
+  if (!incoming || typeof incoming !== "object")
+    throw new AppError("保存内容无效。");
+  if (
+    incoming.confirmedByUser &&
+    incoming.selected &&
+    !original.candidates.some((c) => c.id === incoming.selected!.id)
+  )
+    throw new AppError("候选歌曲不属于这个任务。");
+  // Stored candidates and an equally recent server review are authoritative.
+  // This also keeps web evidence when an older page saves the same review date.
+  const savedReview =
+    original.aiReview &&
+    (original.aiReview.reviewedAt || 0) >= (incoming.aiReview?.reviewedAt || 0)
+      ? original.aiReview
+      : undefined;
+  const match = validateMatch(
+    {
+      ...incoming,
+      candidates: original.candidates,
+      aiReview: savedReview || incoming.aiReview,
+    },
+    original.source,
+  );
+  return match && savedReview ? applyAiReview(match, savedReview) : match;
+}
 export function validateMatch(value: unknown, source: Song): Match | null {
   const m = value as Match;
   if (!m || m.status === "pending") return null;
@@ -87,9 +117,9 @@ export function validateMatch(value: unknown, source: Song): Match | null {
   const chosen = m.selected
     ? candidates.find((c) => c.id === m.selected!.id)
     : null;
-  if (m.confirmedByUser && chosen) {
-    base.selected = chosen;
-    base.status = "matched";
+  if (m.confirmedByUser) {
+    base.selected = chosen || null;
+    base.status = chosen ? "matched" : "review";
     base.confirmedByUser = true;
   }
   base.included = !!m.included && !!base.selected && base.status === "matched";
@@ -134,11 +164,7 @@ export function validateMatch(value: unknown, source: Song): Match | null {
         }),
       };
     }
-    base.aiReview = checked;
-    if (!m.confirmedByUser && m.status === "review") {
-      base.status = "review";
-      base.included = false;
-    }
+    return applyAiReview(base, checked);
   }
   return base;
 }

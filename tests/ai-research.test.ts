@@ -44,12 +44,12 @@ const advice: AiReview = {
   reviewedAt: 2000,
 };
 
-test("artist aliases and simplified/traditional title differences require web research", () => {
+test("artist aliases require web research; simplified/traditional titles normalize equally", () => {
   assert.equal(needsArtistResearch(source, [track("a")]), false);
   assert.equal(needsArtistResearch(source, [track("b", "Singer A")]), true);
   assert.equal(
     needsArtistResearch(source, [{ ...track("a"), name: "后来" }]),
-    true,
+    false,
   );
   assert.equal(needsArtistResearch(source, []), true);
   assert.equal(needsAiReview(makeMatch(source, [])), true);
@@ -167,7 +167,7 @@ test("verified alternate spelling searches Spotify; cooldown retains evidence wi
   }
 });
 
-test("original singer alternative stays unselected, results persist with accurate totals and manual choices", () => {
+test("verified original singer alternative is selected, persists with accurate totals and respects manual choices", () => {
   const store = new TaskStore(":memory:");
   try {
     const original = track("b", "翻唱者");
@@ -195,7 +195,9 @@ test("original singer alternative stays unselected, results persist with accurat
     let task = store.get(id, "alice");
     assert.equal(task.aiReviewed, 1);
     assert.equal(task.aiMatched, 1);
-    assert.equal(task.matches[0].included, false);
+    assert.equal(task.matches[0].included, true);
+    assert.equal(task.matches[0].selected?.id, track("a").id);
+    assert.equal(task.matches[0].aiSelected, true);
     assert.equal(task.matches[0].aiReview?.matchKind, "original_alternative");
     assert.deepEqual(
       task.matches[0].aiReview?.research?.sources,
@@ -235,7 +237,7 @@ test("original singer alternative stays unselected, results persist with accurat
     assert.deepEqual(validated.aiReview?.research?.sources, []);
     assert.equal(
       applyAiReview(makeMatch(source, [track("a")]), result).included,
-      false,
+      true,
     );
   } finally {
     store.close();

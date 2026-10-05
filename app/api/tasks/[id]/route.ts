@@ -7,8 +7,7 @@ import {
 } from "@/lib/http";
 import { taskOwner } from "@/lib/task-owner";
 import { taskStore } from "@/lib/task-store";
-import { validateMatch } from "@/lib/task-validation";
-import { applyAiReview } from "@/lib/matching";
+import { validateSavedMatch } from "@/lib/task-validation";
 import type { TaskWorkspace } from "@/lib/task-types";
 import type { Match } from "@/lib/types";
 
@@ -55,27 +54,7 @@ export async function POST(request: Request, context: Context) {
           if (!Number.isInteger(update?.index) || !task.matches[update.index])
             throw new AppError("歌曲位置无效。");
           const original = task.matches[update.index];
-          const incoming = update.match as Match;
-          if (
-            !incoming ||
-            !Array.isArray(incoming.candidates) ||
-            incoming.candidates.some(
-              (c) => !original.candidates.some((o) => o.id === c.id),
-            )
-          )
-            throw new AppError("候选歌曲不属于这个任务。");
-          let match = validateMatch(
-            { ...incoming, candidates: original.candidates },
-            original.source,
-          );
-          // A stale browser save must not erase a newer server-saved AI review.
-          if (
-            match &&
-            original.aiReview &&
-            (original.aiReview.reviewedAt || 0) >
-              (match.aiReview?.reviewedAt || 0)
-          )
-            match = applyAiReview(match, original.aiReview);
+          const match = validateSavedMatch(update.match, original);
           if (match && original.status !== "pending")
             updates.push({ index: update.index, match });
         }

@@ -1,8 +1,10 @@
 import type { AiReview, Candidate, Match, Song } from "./types";
+import { Converter } from "opencc-js/t2cn";
+
+const simplify = Converter({ from: "t", to: "cn" });
 
 export function normalize(text: string): string {
-  return text
-    .normalize("NFKC")
+  return simplify(text.normalize("NFKC"))
     .toLowerCase()
     .replace(/\([^)]*\)|\[[^\]]*\]|（[^）]*）/g, " ")
     .replace(/[-–—_]/g, " ")
@@ -11,20 +13,101 @@ export function normalize(text: string): string {
 }
 
 function versions(name: string) {
+  const text = simplify(name.normalize("NFKC"));
   return [
     "live",
     "remix",
     "acoustic",
     "instrumental",
     "karaoke",
+    "cover",
     "伴奏",
     "现场",
     "翻唱",
+    "烟嗓",
+    "女声版",
+    "男声版",
+    "加速版",
+    "降速版",
+    "卡拉OK",
   ]
     .filter((tag) =>
-      new RegExp(/[a-z]/.test(tag) ? `\\b${tag}\\b` : tag, "i").test(name),
+      new RegExp(/^[a-z]+$/.test(tag) ? `\\b${tag}\\b` : tag, "i").test(text),
     )
     .join("|");
+}
+
+export function excludedVersion(source: Song, candidate: Song): boolean {
+  // Inspect version labels before stripping parentheses for title comparison.
+  const sourceVersions = new Set(
+    versions(`${source.name} ${source.album}`).split("|"),
+  );
+  return versions(`${candidate.name} ${candidate.album}`)
+    .split("|")
+    .some((tag) => tag && !sourceVersions.has(tag));
+}
+
+export function rankedCandidates(
+  source: Song,
+  candidates: Candidate[],
+): Candidate[] {
+  return candidates
+    .map((c) => scoreCandidate(source, c))
+    .sort(
+      (a, b) =>
+        Number(excludedVersion(source, a)) -
+          Number(excludedVersion(source, b)) ||
+        b.score - a.score ||
+        (a.durationDiff ?? Infinity) - (b.durationDiff ?? Infinity),
+    );
+}
+
+function automaticCandidate(
+  match: Match,
+  advice: AiReview,
+): Candidate | undefined {
+  if (advice.decision !== "match" || advice.confidence !== "high") return;
+  const candidate = match.candidates.find((c) => c.id === advice.candidateId);
+  if (!candidate || excludedVersion(match.source, candidate)) return;
+  const differentArtist = !match.source.artists.some((a) =>
+    candidate.artists.some((b) => normalize(a) === normalize(b)),
+  );
+  if (
+    (differentArtist || advice.matchKind === "original_alternative") &&
+    !advice.research?.sources.length
+  )
+    return;
+  if (
+    advice.matchKind === "original_alternative" &&
+    !advice.research?.originalArtist
+  )
+    return;
+  return candidate;
+}
+
+export function visibleCandidates(match: Match): Candidate[] {
+  const candidates = rankedCandidates(match.source, match.candidates).filter(
+    (c) =>
+      !excludedVersion(match.source, c) ||
+      (match.confirmedByUser && match.selected?.id === c.id),
+  );
+  if (match.aiReview?.decision === "skip" && !match.confirmedByUser) return [];
+  if (match.aiSelected && match.selected) {
+    return candidates
+      .filter(
+        (c) =>
+          c.id === match.selected!.id ||
+          c.artists.some((a) =>
+            match.selected!.artists.some((b) => normalize(a) === normalize(b)),
+          ),
+      )
+      .sort(
+        (a, b) =>
+          Number(b.id === match.selected!.id) -
+          Number(a.id === match.selected!.id),
+      );
+  }
+  return candidates;
 }
 
 export function needsArtistResearch(source: Song, candidates: Candidate[]) {
@@ -89,12 +172,8 @@ export function scoreCandidate(
 }
 
 export function makeMatch(source: Song, candidates: Candidate[]): Match {
-  const sorted = [...candidates].sort(
-    (a, b) =>
-      b.score - a.score ||
-      (a.durationDiff ?? Infinity) - (b.durationDiff ?? Infinity),
-  );
-  const selected = sorted[0] ?? null;
+  const sorted = rankedCandidates(source, candidates);
+  const selected = sorted.find((c) => !excludedVersion(source, c)) ?? null;
   return {
     source,
     candidates: sorted,
@@ -161,7 +240,10 @@ export function matchesToCsv(matches: Match[]): string {
 export function needsAiReview(match: Match): boolean {
   return (
     !match.confirmedByUser &&
-    !match.aiReview &&
+    (!match.aiReview ||
+      (match.aiReview.decision === "match" &&
+        match.aiReview.confidence === "high" &&
+        !automaticCandidate(match, match.aiReview))) &&
     (match.status === "missing" ||
       match.status === "review" ||
       (match.status === "matched" &&
@@ -173,16 +255,31 @@ export function needsAiReview(match: Match): boolean {
 }
 
 export function applyAiReview(match: Match, advice: AiReview): Match {
-  const agrees =
-    advice.decision === "match" &&
-    advice.confidence === "high" &&
-    advice.matchKind !== "original_alternative" &&
-    advice.candidateId === match.selected?.id;
+  const candidates = rankedCandidates(match.source, match.candidates);
+  if (match.confirmedByUser)
+    return { ...match, candidates, aiReview: advice, aiSelected: false };
+  const selected = automaticCandidate({ ...match, candidates }, advice) || null;
   return {
     ...match,
+    candidates: selected
+      ? [selected, ...candidates.filter((c) => c.id !== selected.id)]
+      : candidates,
     aiReview: advice,
-    ...(!match.confirmedByUser && !agrees
-      ? { status: "review" as const, included: false }
-      : {}),
+    selected,
+    status: selected ? "matched" : "review",
+    included: !!selected,
+    aiSelected: !!selected,
   };
+}
+
+export function reconcileMatch(match: Match): Match {
+  if (match.status === "pending") return match;
+  if (match.aiReview) return applyAiReview(match, match.aiReview);
+  if (match.confirmedByUser)
+    return {
+      ...match,
+      candidates: rankedCandidates(match.source, match.candidates),
+    };
+  const fresh = makeMatch(match.source, match.candidates);
+  return { ...match, ...fresh, included: match.included && fresh.included };
 }

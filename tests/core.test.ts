@@ -46,7 +46,7 @@ test("playlist links are restricted to NetEase and playlist routes", () => {
   ])
     assert.equal(parsePlaylistId(input), null);
 });
-test("same-title covers, live versions and large duration differences require review", () => {
+test("different artists and durations need review, while incompatible live versions are excluded", () => {
   assert.equal(
     makeMatch(source, [scoreCandidate(source, candidate)]).included,
     true,
@@ -60,12 +60,12 @@ test("same-title covers, live versions and large duration differences require re
     const result = makeMatch(source, [
       scoreCandidate(source, { ...candidate, ...replacement }),
     ]);
-    assert.equal(result.status, "review");
+    assert.equal(result.status, replacement.name ? "missing" : "review");
     assert.equal(result.included, false);
   }
   assert.equal(makeMatch(source, []).status, "missing");
 });
-test("AI cannot choose a fabricated candidate or silently approve a match", () => {
+test("AI cannot choose fabricated or incompatible candidates and preserves manual choices", () => {
   const track = scoreCandidate(source, { ...candidate, name: "晴天 (Live)" });
   const match = makeMatch(source, [track]);
   assert.equal(needsAiReview(match), true);
@@ -79,7 +79,7 @@ test("AI cannot choose a fabricated candidate or silently approve a match", () =
   const after = applyAiReview(match, advice);
   assert.equal(after.included, false);
   assert.equal(after.status, "review");
-  assert.equal(needsAiReview(after), false);
+  assert.equal(needsAiReview(after), true);
   assert.throws(() =>
     validateReview({ ...good, candidateId: "invented" }, [track], "test"),
   );

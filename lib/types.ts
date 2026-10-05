@@ -30,6 +30,7 @@ export type Match = {
   included: boolean;
   aiReview?: AiReview;
   confirmedByUser?: boolean;
+  aiSelected?: boolean;
 };
 export type AiReview = {
   decision: "match" | "skip" | "uncertain";

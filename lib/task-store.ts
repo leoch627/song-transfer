@@ -6,7 +6,7 @@ import { AppError } from "./http";
 import { seal, unseal } from "./crypto";
 import type { Session } from "./auth";
 import type { AiReviewResponse, Match, Playlist, Song } from "./types";
-import { applyAiReview } from "./matching";
+import { applyAiReview, reconcileMatch } from "./matching";
 import type {
   QuotaStatus,
   TaskSummary,
@@ -87,6 +87,38 @@ export class TaskStore {
           resumeAt ? "Spotify 暂时限流，到时自动重试。" : "",
           this.now(),
         );
+    });
+    this.applySavedAiSelections();
+  }
+  applySavedAiSelections() {
+    return this.transaction(() => {
+      const migrated = this.db
+        .prepare("INSERT OR IGNORE INTO task_migrations(name) VALUES(?)")
+        .run("ai-auto-selection-v1");
+      if (!migrated.changes) return { updated: 0, selected: 0 };
+      const rows = this.db
+        .prepare(
+          `SELECT s.task_id,s.position,s.match FROM task_songs s JOIN tasks t ON t.id=s.task_id
+        WHERE s.match IS NOT NULL AND COALESCE(json_extract(t.workspace,'$.writeStarted'),0)=0`,
+        )
+        .all() as { task_id: string; position: number; match: string }[];
+      let updated = 0,
+        selected = 0;
+      for (const row of rows) {
+        const match = reconcileMatch(JSON.parse(row.match));
+        if (JSON.stringify(match) === row.match) continue;
+        this.db
+          .prepare(
+            "UPDATE task_songs SET match=? WHERE task_id=? AND position=?",
+          )
+          .run(JSON.stringify(match), row.task_id, row.position);
+        this.db
+          .prepare("UPDATE tasks SET updated_at=? WHERE id=?")
+          .run(this.now(), row.task_id);
+        updated++;
+        if (match.aiSelected) selected++;
+      }
+      return { updated, selected };
     });
   }
   transaction<T>(fn: () => T): T {
@@ -523,7 +555,7 @@ export class TaskStore {
       .get(owner, songKey(source), this.now() - 30 * DAY) as
       | { match: string }
       | undefined;
-    return row ? { ...JSON.parse(row.match), source } : null;
+    return row ? reconcileMatch({ ...JSON.parse(row.match), source }) : null;
   }
   completeSong(task: ClaimedTask, index: number, match: Match) {
     this.transaction(() => {
