@@ -46,6 +46,15 @@ export async function POST(request: Request) {
     const owner = (await taskOwner(true))!;
     const taskId = typeof data.taskId === "string" ? data.taskId : null;
     const task = taskId ? store.get(taskId, owner) : null;
+    if (
+      task?.aiJob &&
+      (["queued", "running", "waiting"].includes(task.aiJob.status) ||
+        task.aiJob.current.length)
+    )
+      throw new AppError(
+        "此任务已在后台复核，请刷新页面查看进度，避免重复处理。",
+        409,
+      );
     const index =
       task?.matches.findIndex(
         (m) => m.source.id === (data.source as Song).id,

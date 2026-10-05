@@ -14,6 +14,7 @@ import type {
   TransferTask,
 } from "./task-types";
 import type { SearchCheckpoint, TransferResult } from "./spotify";
+import { AiTaskQueue } from "./ai-task-queue";
 
 export const DAY = 86400000;
 type Row = {
@@ -68,6 +69,7 @@ export class TaskStore {
       CREATE TABLE IF NOT EXISTS auth_attempts (scope TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS auth_attempts_scope ON auth_attempts(scope,at);
       CREATE TABLE IF NOT EXISTS task_migrations (name TEXT PRIMARY KEY);`);
+    AiTaskQueue.initialize(this.db);
     this.transaction(() => {
       const migration = this.db
         .prepare("INSERT OR IGNORE INTO task_migrations(name) VALUES(?)")
@@ -227,6 +229,17 @@ export class TaskStore {
       this.db.prepare("DELETE FROM task_accounts WHERE owner=?").run(owner);
       this.db
         .prepare(
+          "UPDATE tasks SET updated_at=MAX(updated_at+1,?) WHERE owner=? AND id IN (SELECT task_id FROM ai_jobs WHERE status IN ('queued','running','waiting'))",
+        )
+        .run(this.now(), owner);
+      this.db
+        .prepare(
+          `UPDATE ai_jobs SET status='needs_auth',error='Spotify 已断开，请重新连接后继续复核。'
+        WHERE task_id IN (SELECT id FROM tasks WHERE owner=?) AND status IN ('queued','running','waiting')`,
+        )
+        .run(owner);
+      this.db
+        .prepare(
           "UPDATE tasks SET status='needs_auth',error='Spotify 已断开，请重新连接后继续。',updated_at=? WHERE owner=? AND status IN ('running','queued','waiting')",
         )
         .run(this.now(), owner);
@@ -312,6 +325,7 @@ export class TaskStore {
     >;
     return {
       id: row.id,
+      aiJob: new AiTaskQueue(this).summary(row.id),
       name: JSON.parse(row.workspace).name,
       status: row.status,
       ...counts,
@@ -411,6 +425,7 @@ export class TaskStore {
     owner: string,
     index: number,
     result: AiReviewResponse,
+    afterSave?: () => void,
   ) {
     return this.transaction(() => {
       const task = this.get(id, owner);
@@ -455,6 +470,7 @@ export class TaskStore {
       this.db
         .prepare("UPDATE tasks SET updated_at=? WHERE id=?")
         .run(this.now(), id);
+      afterSave?.();
       return { ...review, candidates, excludedCandidates };
     });
   }
@@ -468,6 +484,15 @@ export class TaskStore {
         );
       if (task.completed !== task.total)
         throw new AppError("请等待全部歌曲匹配完成。", 409);
+      if (
+        task.aiJob &&
+        (task.aiJob.current.length ||
+          ["queued", "running", "waiting"].includes(task.aiJob.status))
+      )
+        throw new AppError(
+          "请等待 AI 复核完成，或暂停复核并等待在途结果保存后再迁移。",
+          409,
+        );
       const uris = task.matches
         .filter((m) => m.included && m.selected && m.status === "matched")
         .map((m) => m.selected!.uri);

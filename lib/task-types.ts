@@ -17,6 +17,7 @@ export type QuotaStatus = {
   reason: string;
 };
 export type TaskSummary = {
+  aiJob?: AiJobSummary | null;
   id: string;
   name: string;
   status: TaskStatus;
@@ -29,6 +30,30 @@ export type TaskSummary = {
   resumeAt: number;
   error: string;
   updatedAt: number;
+};
+export type AiJobSummary = {
+  status:
+    | "queued"
+    | "running"
+    | "waiting"
+    | "paused"
+    | "failed"
+    | "needs_auth"
+    | "complete";
+  total: number;
+  completed: number;
+  current: string[];
+  resumeAt: number;
+  error: string;
+};
+export const aiJobLabels: Record<AiJobSummary["status"], string> = {
+  queued: "等待处理",
+  running: "后台复核中",
+  waiting: "等待限流恢复",
+  paused: "已暂停",
+  failed: "处理暂停",
+  needs_auth: "请重新连接 Spotify",
+  complete: "本轮完成",
 };
 export type TaskWorkspace = {
   name: string;

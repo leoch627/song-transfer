@@ -184,8 +184,9 @@ export function useTaskQueue(options: Options) {
         await save();
         await request(`/api/tasks/${state.current.id}`, { action: "resume" });
         await load(state.current.id, true);
+        return state.current.id;
       } else {
-        const draftKey = `songshift-draft-${state.current.accountId}-${state.current.playlist!.id}`;
+        const draftKey = `songshift-draft-${state.current.accountId}-${state.current.playlist!.provider || "netease"}-${state.current.playlist!.id}`;
         let requestId = crypto.randomUUID();
         try {
           requestId = localStorage.getItem(draftKey) || requestId;
@@ -208,6 +209,7 @@ export function useTaskQueue(options: Options) {
         try {
           localStorage.removeItem(draftKey);
         } catch {}
+        return data.task.id;
       }
     } catch (error) {
       state.current.onError(error);
@@ -223,6 +225,25 @@ export function useTaskQueue(options: Options) {
       await save();
       await request(`/api/tasks/${state.current.id}`, { action: "pause" });
       await load(state.current.id, true);
+    } catch (error) {
+      state.current.onError(error);
+    } finally {
+      setPending(false);
+    }
+  }
+  async function reviewAi(
+    action: "start" | "pause",
+    indices?: number[],
+    webSearch = false,
+  ) {
+    if (pending) return;
+    const id = state.current.id || (action === "start" ? await start() : null);
+    if (!id) return;
+    setPending(true);
+    try {
+      await save();
+      await request(`/api/tasks/${id}/ai`, { action, indices, webSearch });
+      await load(id, true);
     } catch (error) {
       state.current.onError(error);
     } finally {
@@ -270,6 +291,7 @@ export function useTaskQueue(options: Options) {
     syncError,
     start,
     pause,
+    reviewAi,
     open,
     remove,
     save,

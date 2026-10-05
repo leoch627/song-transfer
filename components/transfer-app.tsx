@@ -64,7 +64,7 @@ import type {
 } from "@/lib/types";
 import type { TransferResult } from "@/lib/spotify";
 import { useTaskQueue } from "./use-task-queue";
-import { taskLabels, type TransferTask } from "@/lib/task-types";
+import { taskLabels, aiJobLabels, type TransferTask } from "@/lib/task-types";
 import { AccountForm } from "./account-form";
 import type { User } from "@/lib/accounts";
 
@@ -479,6 +479,13 @@ export default function TransferApp() {
   const aiProgress = aiTotal
     ? Math.round((aiReviewed.length / aiTotal) * 100)
     : 0;
+  const serverAiJob = !demo ? queue.task?.aiJob : null;
+  const serverAiActive =
+    !!serverAiJob &&
+    ["queued", "running", "waiting"].includes(serverAiJob.status);
+  const serverAiDraining = !!serverAiJob?.current.length;
+  const serverAiRemaining =
+    !!serverAiJob && serverAiJob.completed < serverAiJob.total;
   const savedAiCount = !demo && taskId ? queue.task?.aiReviewed : undefined;
   function filterAi(value: AiFilter) {
     setAiFilter(value);
@@ -659,11 +666,29 @@ export default function TransferApp() {
     );
     setReviewId(null);
   }
-  async function runAiReview(items: Match[], webSearch = false) {
+  async function runAiReview(
+    items: Match[],
+    webSearch = false,
+    allPending = false,
+  ) {
     if (working.current || writeStarted || !items.length) return;
     if (!demo && !ai.configured) {
       setModal("settings");
       setReviewId(null);
+      return;
+    }
+    if (!demo) {
+      setMessage(null);
+      setReviewId(null);
+      await queue.reviewAi(
+        "start",
+        allPending
+          ? undefined
+          : items.map((item) =>
+              matches.findIndex((m) => m.source.id === item.source.id),
+            ),
+        webSearch,
+      );
       return;
     }
     working.current = true;
@@ -1021,9 +1046,9 @@ export default function TransferApp() {
                 </svg>
               </h1>
               <p>
-                把网易云和 QQ 音乐的心动，带到 Spotify。
+                网易云 / QQ 音乐 → Spotify。
                 <br />
-                歌单轻松迁移，让熟悉的旋律继续陪伴。
+                熟悉的旋律，换个地方继续。
               </p>
               <div className="hero-tags">
                 <span>
@@ -1484,14 +1509,28 @@ export default function TransferApp() {
                           ` · 服务器已保存 ${savedAiCount} 首`}
                       </p>
                       <p>
-                        {aiBatch?.taskId === taskId
-                          ? `本轮 ${aiBatch.done} / ${aiBatch.total} 首（${Math.round((aiBatch.done / aiBatch.total) * 100)}%） · ${{ running: "正在处理", pausing: "等待在途结果保存", paused: "已暂停于", failed: "中断于", complete: "最后完成" }[aiBatch.state]}：${aiBatch.current || "准备中"}`
-                          : lastAiReview?.aiReview?.reviewedAt
-                            ? `最近完成：${lastAiReview.source.name} · ${aiDecisionLabels[lastAiReview.aiReview.decision]} · ${new Date(lastAiReview.aiReview.reviewedAt).toLocaleString("zh-CN")}`
-                            : "点击下面的结果分类，查看已完成的歌曲和判断理由。"}
+                        {serverAiJob
+                          ? `后台复核 ${serverAiJob.completed} / ${serverAiJob.total} 首 · ${aiJobLabels[serverAiJob.status]}${serverAiJob.current.length ? `：${serverAiJob.current.join("、")}` : ""}${serverAiJob.resumeAt ? ` · ${new Date(serverAiJob.resumeAt).toLocaleString("zh-CN")} 后自动继续` : ""}`
+                          : aiBatch?.taskId === taskId
+                            ? `本轮 ${aiBatch.done} / ${aiBatch.total} 首（${Math.round((aiBatch.done / aiBatch.total) * 100)}%） · ${{ running: "正在处理", pausing: "等待在途结果保存", paused: "已暂停于", failed: "中断于", complete: "最后完成" }[aiBatch.state]}：${aiBatch.current || "准备中"}`
+                            : lastAiReview?.aiReview?.reviewedAt
+                              ? `最近完成：${lastAiReview.source.name} · ${aiDecisionLabels[lastAiReview.aiReview.decision]} · ${new Date(lastAiReview.aiReview.reviewedAt).toLocaleString("zh-CN")}`
+                              : "点击下面的结果分类，查看已完成的歌曲和判断理由。"}
                       </p>
                     </div>
-                    {busy === "ai" ? (
+                    {serverAiJob?.error && (
+                      <p className="task-error">{serverAiJob.error}</p>
+                    )}
+                    {serverAiActive || serverAiDraining ? (
+                      <button
+                        className="ai-button"
+                        disabled={queue.pending || !serverAiActive}
+                        onClick={() => void queue.reviewAi("pause")}
+                      >
+                        <Pause size={13} />
+                        {serverAiActive ? "暂停后台复核" : "等待在途结果保存…"}
+                      </button>
+                    ) : busy === "ai" ? (
                       <button
                         className="ai-button"
                         onClick={() => {
@@ -1509,8 +1548,17 @@ export default function TransferApp() {
                     ) : (
                       <button
                         className="ai-button"
-                        onClick={() => runAiReview(aiPending)}
-                        disabled={!!busy || writeStarted || !aiPending.length}
+                        onClick={() =>
+                          serverAiRemaining
+                            ? void queue.reviewAi("start")
+                            : void runAiReview(aiPending, false, true)
+                        }
+                        disabled={
+                          !!busy ||
+                          queue.pending ||
+                          writeStarted ||
+                          (!aiPending.length && !serverAiRemaining)
+                        }
                       >
                         <Sparkles size={13} />
                         {demo
@@ -1522,7 +1570,7 @@ export default function TransferApp() {
                     )}
                     <span className="ai-data-note">
                       AI
-                      确认后自动选择并勾选，烟嗓等不符版本会排除。歌手别名先联网核实；请保持网页打开，刷新后可继续剩余歌曲。
+                      确认后自动选择并勾选，烟嗓等不符版本会排除。歌手别名先联网核实；后台复核可在关闭网页后继续，回来后自动同步进度和结果。
                     </span>
                   </div>
                 )}
@@ -1533,7 +1581,8 @@ export default function TransferApp() {
                     aria-live="polite"
                   >
                     <div className="ai-progress-label">
-                      待复核范围已完成 {aiProgress}% · 未匹配完的歌曲会随后加入
+                      待复核范围已完成 {aiProgress}% ·
+                      新匹配的歌曲会进入待复核列表
                     </div>
                     <div
                       className="progress-track"
@@ -2173,7 +2222,8 @@ export default function TransferApp() {
       {modal === "history" && (
         <Modal title="后台任务" onClose={() => setModal(null)}>
           <p className="task-intro">
-            任务会在服务器分批匹配。关闭网页不影响运行；额度不足时自动等待，恢复后继续。登录同一账号即可跨设备查看。
+            匹配和 AI
+            复核都在服务器运行。关闭网页不影响处理；遇到限流自动等待，恢复后继续。登录同一账号即可跨设备查看。
           </p>
           {!user && (
             <button
@@ -2207,6 +2257,15 @@ export default function TransferApp() {
                   {item.aiMatched || 0} · 跳过 {item.aiSkipped || 0} · 不确定{" "}
                   {item.aiUncertain || 0}
                 </p>
+                {item.aiJob && (
+                  <p>
+                    AI 本轮 {item.aiJob.completed} / {item.aiJob.total} 首 ·{" "}
+                    {aiJobLabels[item.aiJob.status]}
+                    {item.aiJob.current.length
+                      ? `：${item.aiJob.current.join("、")}`
+                      : ""}
+                  </p>
+                )}
                 <div className="task-mini-progress">
                   <span
                     style={{
