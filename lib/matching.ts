@@ -1,4 +1,10 @@
-import type { AiReview, Candidate, Match, Song } from "./types";
+import type {
+  AiReview,
+  Candidate,
+  Match,
+  PlaylistProvider,
+  Song,
+} from "./types";
 import { Converter } from "opencc-js/t2cn";
 
 const simplify = Converter({ from: "t", to: "cn" });
@@ -254,7 +260,10 @@ export function parsePlaylistId(value: string): string | null {
   }
 }
 
-export function matchesToCsv(matches: Match[]): string {
+export function matchesToCsv(
+  matches: Match[],
+  provider: PlaylistProvider = "netease",
+): string {
   const escape = (value: unknown) => {
     let text = String(value ?? "");
     if (/^[=+\-@\t\r\n]/.test(text)) text = `'${text}`;
@@ -281,7 +290,7 @@ export function matchesToCsv(matches: Match[]): string {
   return (
     "\uFEFF" +
     [
-      "netease_name,netease_artist,spotify_name,spotify_artist,spotify_url,score,duration_diff_ms,status,included,ai_decision,ai_candidate_id,ai_reason,ai_match_kind,original_artist,research_summary,research_sources",
+      `${provider}_name,${provider}_artist,spotify_name,spotify_artist,spotify_url,score,duration_diff_ms,status,included,ai_decision,ai_candidate_id,ai_reason,ai_match_kind,original_artist,research_summary,research_sources`,
       ...rows.map((row) => row.map(escape).join(",")),
     ].join("\r\n")
   );

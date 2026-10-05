@@ -74,6 +74,7 @@ export async function getPlaylist(input: string): Promise<Playlist> {
     : [...songs.values()];
   const total = Math.max(playlist.trackCount || 0, ids.length, ordered.length);
   return {
+    provider: "netease",
     id,
     name: playlist.name,
     creator: playlist.creator?.nickname || "网易云用户",

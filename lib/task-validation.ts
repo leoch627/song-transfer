@@ -27,6 +27,9 @@ export function validatePlaylist(value: unknown): Playlist {
   const p = value as Playlist;
   if (
     !p ||
+    (p.provider !== undefined &&
+      p.provider !== "netease" &&
+      p.provider !== "qq") ||
     typeof p.id !== "string" ||
     p.id.length > 100 ||
     typeof p.name !== "string" ||

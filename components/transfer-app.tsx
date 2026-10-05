@@ -46,7 +46,14 @@ import {
   reconcileMatch,
   parsePlaylistId,
 } from "@/lib/matching";
+import {
+  detectPlaylistProvider,
+  parseQqPlaylistId,
+  providerNames,
+  qqShortShareUrl,
+} from "@/lib/playlist-source";
 import type {
+  PlaylistProvider,
   AiReview,
   AiReviewResponse,
   AiStatus,
@@ -230,7 +237,10 @@ export default function TransferApp() {
     concurrency: 3,
   });
   const [input, setInput] = useState("");
+  const [provider, setProvider] = useState<PlaylistProvider>("netease");
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
+  const sourceName = providerNames[playlist?.provider || "netease"];
+  const inputSourceName = providerNames[provider];
   const [matches, setMatches] = useState<Match[]>([]);
   const [demo, setDemo] = useState(false);
   const [name, setName] = useState("");
@@ -279,6 +289,7 @@ export default function TransferApp() {
         setAiFilter("all");
         setAiBatch(null);
         setPlaylist(task.playlist);
+        setProvider(task.playlist.provider || "netease");
         setMatches(task.matches);
         setDemo(false);
         setName(task.workspace.name);
@@ -334,6 +345,7 @@ export default function TransferApp() {
               (!data.accountId || data.accountId === account?.id)
             ) {
               setPlaylist(data.playlist);
+              setProvider(data.playlist.provider || "netease");
               setMatches(
                 data.writeStarted
                   ? data.matches
@@ -483,6 +495,7 @@ export default function TransferApp() {
     setAiBatch(null);
     setTaskId(null);
     setPlaylist(data);
+    setProvider(data.provider || "netease");
     setDemo(isDemo);
     setName(data.name);
     setMatches(
@@ -513,10 +526,15 @@ export default function TransferApp() {
   }
   async function readPlaylist() {
     if (working.current || queue.pending) return;
-    if (!parsePlaylistId(input)) {
+    const selectedProvider = detectPlaylistProvider(input) || provider;
+    const valid =
+      selectedProvider === "qq"
+        ? parseQqPlaylistId(input) || qqShortShareUrl(input)
+        : parsePlaylistId(input);
+    if (!valid) {
       setMessage({
         kind: "error",
-        text: "请输入有效的网易云歌单链接或数字 ID。短链接请先打开，再复制完整歌单地址。",
+        text: `请输入有效的${providerNames[selectedProvider]}歌单链接或数字 ID。短链接请先打开，再复制完整歌单地址。`,
       });
       return;
     }
@@ -524,7 +542,9 @@ export default function TransferApp() {
     setBusy("read");
     setMessage(null);
     try {
-      const data = await api<Playlist>("/api/netease/playlist", { input });
+      const data = await api<Playlist>(`/api/${selectedProvider}/playlist`, {
+        input,
+      });
       loadPlaylist(data, false);
       if (!data.songs.length)
         setMessage({
@@ -746,7 +766,9 @@ export default function TransferApp() {
   }
   function exportCsv(subset: Match[] = matches) {
     const url = URL.createObjectURL(
-      new Blob([matchesToCsv(subset)], { type: "text/csv;charset=utf-8;" }),
+      new Blob([matchesToCsv(subset, playlist?.provider)], {
+        type: "text/csv;charset=utf-8;",
+      }),
     );
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -999,7 +1021,7 @@ export default function TransferApp() {
                 </svg>
               </h1>
               <p>
-                把网易云的心动，带到 Spotify。
+                把网易云和 QQ 音乐的心动，带到 Spotify。
                 <br />
                 歌单轻松迁移，让熟悉的旋律继续陪伴。
               </p>
@@ -1042,14 +1064,16 @@ export default function TransferApp() {
                   <i />
                 </div>
               </div>
-              <div className="floating-service netease-float">
-                <NeteaseMark />
+              <div
+                className={`floating-service netease-float ${provider === "qq" ? "qq-float" : ""}`}
+              >
+                {provider === "qq" ? <Music2 /> : <NeteaseMark />}
               </div>
               <div className="floating-service spotify-float">
                 <SpotifyMark />
               </div>
               <div className="art-caption">
-                <span>网易云音乐</span>
+                <span>{inputSourceName}</span>
                 <span className="art-arrow">
                   · · · <ArrowRight size={17} /> · · ·
                 </span>
@@ -1107,12 +1131,32 @@ export default function TransferApp() {
                 <span className="section-kicker">FROM / 音乐来源</span>
                 <span className="soft-badge">公开歌单 · 免登录</span>
               </div>
+              <div
+                className="source-selector"
+                role="group"
+                aria-label="选择音乐来源"
+              >
+                {(["netease", "qq"] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={provider === value}
+                    disabled={!!busy || queue.pending}
+                    onClick={() => {
+                      setProvider(value);
+                      setInput("");
+                    }}
+                  >
+                    {providerNames[value]}
+                  </button>
+                ))}
+              </div>
               <div className="service-title">
-                <span className="service-logo netease">
-                  <NeteaseMark />
+                <span className={`service-logo ${provider}`}>
+                  {provider === "qq" ? <Music2 size={28} /> : <NeteaseMark />}
                 </span>
                 <div>
-                  <h2>网易云音乐</h2>
+                  <h2>{inputSourceName}</h2>
                   <p>那些陪伴你的旋律</p>
                 </div>
                 <span className="service-index">01</span>
@@ -1130,9 +1174,18 @@ export default function TransferApp() {
                 <Link2 size={17} />
                 <input
                   id="playlist-input"
-                  placeholder="music.163.com/playlist?id=…"
+                  placeholder={
+                    provider === "qq"
+                      ? "y.qq.com/n/ryqq/playlist/…"
+                      : "music.163.com/playlist?id=…"
+                  }
                   value={input}
-                  onChange={(event) => setInput(event.target.value)}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setInput(value);
+                    const detected = detectPlaylistProvider(value);
+                    if (detected) setProvider(detected);
+                  }}
                   disabled={!!busy}
                   autoComplete="off"
                 />
@@ -1149,14 +1202,18 @@ export default function TransferApp() {
                 </button>
               </form>
               <div className="source-hint">
-                <span>网易云 → 歌单 → 分享 → 复制链接</span>
+                <span>{inputSourceName} → 歌单 → 分享 → 复制链接</span>
                 <button
                   onClick={() => {
-                    setInput("13586645289");
+                    setInput(
+                      provider === "qq"
+                        ? "https://y.qq.com/n/ryqq/playlist/7799808010"
+                        : "13586645289",
+                    );
                   }}
                   disabled={!!busy}
                 >
-                  填入你的歌单
+                  {provider === "qq" ? "填入公开歌单" : "填入你的歌单"}
                   <ArrowUpRight size={12} />
                 </button>
               </div>
@@ -1251,7 +1308,7 @@ export default function TransferApp() {
                   <Cover name={playlist.name} url={playlist.cover} large />
                   <div className="playlist-meta">
                     <div className="playlist-eyebrow">
-                      {demo ? "示例歌单 · 演示模式" : "已读取网易云歌单"}
+                      {demo ? "示例歌单 · 演示模式" : `已读取${sourceName}歌单`}
                       <span>PLAYLIST</span>
                     </div>
                     <h2>{playlist.name}</h2>
@@ -1281,8 +1338,8 @@ export default function TransferApp() {
                 {playlist.missing > 0 && (
                   <div className="inline-warning">
                     <Info size={15} />
-                    网易云显示 {playlist.total} 首，其中 {playlist.missing}{" "}
-                    首暂时无法读取；下面列出全部可读取歌曲。
+                    {sourceName}显示 {playlist.total} 首，其中{" "}
+                    {playlist.missing} 首暂时无法读取；下面列出全部可读取歌曲。
                   </div>
                 )}
                 <div className="matching-controls">
@@ -1611,7 +1668,7 @@ export default function TransferApp() {
                           />
                         </th>
                         <th className="number-column">#</th>
-                        <th>网易云音乐</th>
+                        <th>{sourceName}</th>
                         <th className="arrow-column" />
                         <th>Spotify 匹配结果</th>
                         <th>匹配状态</th>
@@ -1971,10 +2028,10 @@ export default function TransferApp() {
             </p>
           </div>
           <div className="settings-netease">
-            <h3>网易云音乐</h3>
+            <h3>网易云 / QQ 音乐</h3>
             <p>
-              当前通过公开歌单链接读取，无需登录。尚未查到可供普通开发者直接申请的歌单
-              OAuth 文档；社区扫码登录属于 Cookie 会话方式，本版暂不接入。
+              选择来源后粘贴公开歌单链接或数字 ID，无需登录来源平台。QQ
+              音乐支持公开歌单，私密歌单和未公开的「我喜欢」请先复制到公开歌单再导入。
             </p>
           </div>
         </Modal>
@@ -2022,9 +2079,9 @@ export default function TransferApp() {
             <div>
               <span>01</span>
               <section>
-                <h3>复制网易云公开歌单链接</h3>
+                <h3>复制网易云或 QQ 音乐公开歌单链接</h3>
                 <p>
-                  打开歌单，选择分享并复制链接。也可以直接输入歌单数字
+                  打开歌单，选择分享并复制链接。选择对应来源后，也可以直接输入歌单数字
                   ID。私密歌单请先调整公开状态。
                 </p>
               </section>
@@ -2044,7 +2101,7 @@ export default function TransferApp() {
               <section>
                 <h3>确认后，创建一张新歌单</h3>
                 <p>
-                  只迁移已勾选的歌曲，保持原始顺序。网易云原歌单不会被修改；没有找到的歌曲可以随匹配报告导出。
+                  只迁移已勾选的歌曲，保持原始顺序。来源平台的原歌单不会被修改；没有找到的歌曲可以随匹配报告导出。
                 </p>
               </section>
             </div>
@@ -2103,7 +2160,7 @@ export default function TransferApp() {
             </div>
           </dl>
           <p className="confirm-note">
-            歌曲将按网易云中的原始顺序添加。
+            歌曲将按来源歌单中的原始顺序添加。
             {counts.pending > 0 &&
               `还有 ${counts.pending} 首未匹配，本次不会添加。`}
           </p>
@@ -2224,7 +2281,7 @@ export default function TransferApp() {
       {review && (
         <Modal title="选择合适的歌曲版本" onClose={() => setReviewId(null)}>
           <div className="review-source">
-            <span>网易云原曲</span>
+            <span>{sourceName}原曲</span>
             <h3>{review.source.name}</h3>
             <p>
               {review.source.artists.join(" / ")} · {review.source.album} ·{" "}

@@ -849,6 +849,34 @@ main {
   height: 31px;
   width: 31px;
 }
+.service-logo.qq,
+.floating-service.qq-float {
+  background: #edf7e8;
+  color: #248a58;
+}
+.source-selector {
+  display: flex;
+  gap: 4px;
+  margin-top: 18px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #f3f4ec;
+}
+.source-selector button {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #747c68;
+  font-size: 12px;
+}
+.source-selector button[aria-pressed="true"] {
+  border-color: #dce5d4;
+  background: var(--paper);
+  color: #386445;
+  font-weight: 650;
+}
 .service-logo.spotify {
   background: #edf5e9;
   color: #3c864d;
