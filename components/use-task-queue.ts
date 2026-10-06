@@ -266,6 +266,19 @@ export function useTaskQueue(options: Options) {
       loading.current = false;
     }
   }
+  async function write(action?: "retry") {
+    const id = state.current.id;
+    if (!id) throw new Error("请先创建后台任务并完成匹配。");
+    setPending(true);
+    try {
+      await save();
+      await request("/api/spotify/transfer", { taskId: id, action });
+    } finally {
+      // The enqueue response can be lost even though the durable job exists.
+      // Both accepted and rejected submissions reconcile with server truth.
+      try { await load(id, true); } finally { setPending(false); }
+    }
+  }
   async function remove(id: string) {
     if (pending) return;
     setPending(true);
@@ -295,5 +308,6 @@ export function useTaskQueue(options: Options) {
     open,
     remove,
     save,
+    write,
   };
 }

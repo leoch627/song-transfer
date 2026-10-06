@@ -84,6 +84,7 @@ export type AiStatus = {
   webSearch?: boolean;
 };
 export type AuthStatus = {
+  writeReady?: boolean;
   configured: boolean;
   connected: boolean;
   displayName?: string;

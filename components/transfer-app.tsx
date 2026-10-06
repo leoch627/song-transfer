@@ -65,7 +65,8 @@ import type {
 } from "@/lib/types";
 import type { TransferResult } from "@/lib/spotify";
 import { useTaskQueue } from "./use-task-queue";
-import { taskLabels, aiJobLabels, type TransferTask } from "@/lib/task-types";
+import { taskLabels, aiJobLabels, transferJobLabels, type TransferTask } from "@/lib/task-types";
+import { TransferProgress } from "./transfer-progress";
 import { AccountForm } from "./account-form";
 import type { User } from "@/lib/accounts";
 
@@ -482,6 +483,7 @@ export default function TransferApp() {
   const aiProgress = aiTotal
     ? Math.round((aiReviewed.length / aiTotal) * 100)
     : 0;
+  const transferJob = !demo ? queue.task?.transferJob : null;
   const serverAiJob = !demo ? queue.task?.aiJob : null;
   const serverAiBlocked = serverAiJob?.blocked || [];
   const serverAiPending = serverAiJob
@@ -831,42 +833,10 @@ export default function TransferApp() {
       setBusy(null);
       return;
     }
-    setWriteStarted(true);
     try {
-      // Persist before the write so a reload cannot quietly create a second playlist.
-      localStorage.setItem(
-        SESSION_KEY,
-        JSON.stringify({
-          playlist,
-          matches,
-          demo,
-          name,
-          result: null,
-          writeStarted: true,
-          taskId,
-          isPublic,
-          accountId: user?.id || null,
-        }),
-      );
-    } catch {
-      /* Storage is optional. */
-    }
-    try {
-      if (taskId) await queue.save();
-      const data = await api<TransferResult>("/api/spotify/transfer", {
-        taskId,
-        name,
-        isPublic,
-        uris: selected.map((m) => m.selected!.uri),
-      });
-      setResult(data);
-      if (data.error) setMessage({ kind: "error", text: data.error });
+      await queue.write();
+      setMessage({ kind: "success", text: "已提交后台写入，可以关闭网页，进度会自动保存。" });
     } catch (error) {
-      if (
-        error instanceof ApiError &&
-        [400, 401, 403, 415, 429].includes(error.status)
-      )
-        setWriteStarted(false);
       errorMessage(error);
     } finally {
       working.current = false;
@@ -1932,7 +1902,11 @@ export default function TransferApp() {
                 </div>
               </section>
 
-              {result ? (
+              {transferJob ? (
+                <TransferProgress job={transferJob} pending={queue.pending}
+                  connect={connect}
+                  retry={() => void queue.write("retry").catch(errorMessage)} />
+              ) : result ? (
                 <section
                   className={`result-panel ${result.complete ? "success" : "partial"}`}
                 >
@@ -2001,9 +1975,12 @@ export default function TransferApp() {
                     disabled={
                       !!busy ||
                       writeStarted ||
+                      queue.pending ||
+                      (!demo && (serverAiActive || serverAiDraining)) ||
                       !selected.length ||
                       !name.trim() ||
                       (!demo && !auth.connected) ||
+                      (!demo && auth.writeReady === false) ||
                       (!demo && !!taskId && completed < matches.length)
                     }
                   >
@@ -2013,13 +1990,21 @@ export default function TransferApp() {
                       <ArrowRight size={17} />
                     )}{" "}
                     {busy === "transfer"
-                      ? "正在迁移，请保持页面打开…"
+                      ? "正在提交后台任务…"
                       : `${demo ? "体验迁移" : "迁移到 Spotify"}${selected.length ? ` · ${selected.length} 首` : ""}`}
                   </button>
+                  {!demo && auth.connected && auth.writeReady === false && (
+                    <p className="write-warning">后台写入需要读取歌单以核对进度。请重新授权一次，已有任务会保留。
+                      <button className="text-button" onClick={connect}>重新连接 Spotify</button>
+                    </p>
+                  )}
                   {!demo && taskId && completed < matches.length && (
                     <p className="write-warning">
                       后台会分批完成匹配，全部完成后再统一确认并迁移。
                     </p>
+                  )}
+                  {!demo && (serverAiActive || serverAiDraining) && !writeStarted && (
+                    <p className="write-warning">AI 复核仍在进行，请等它完成；也可以暂停复核，待在途结果保存后提交后台写入。</p>
                   )}
                   {writeStarted && !busy && (
                     <p className="write-warning">
@@ -2235,7 +2220,7 @@ export default function TransferApp() {
           <p className="confirm-description">
             {demo
               ? "将模拟迁移到 Spotify，不会向你的账号写入内容。"
-              : "将在你的 Spotify 账号中新建歌单，并写入已选择的歌曲。"}
+              : "确认后由服务器在你的 Spotify 账号中新建歌单、分批写入所选歌曲。关闭网页后仍会继续，可在后台任务查看进度。"}
           </p>
           <dl className="confirm-details">
             <div>
@@ -2261,7 +2246,7 @@ export default function TransferApp() {
               `还有 ${counts.pending} 首未匹配，本次不会添加。`}
           </p>
           <button className="primary-button full-width" onClick={transfer}>
-            {demo ? "确认体验" : "确认创建并迁移"}
+            {demo ? "确认体验" : "确认并开始后台写入"}
             <ArrowRight size={16} />
           </button>
         </Modal>
@@ -2304,6 +2289,12 @@ export default function TransferApp() {
                   {item.aiMatched || 0} · 跳过 {item.aiSkipped || 0} · 不确定{" "}
                   {item.aiUncertain || 0}
                 </p>
+                {item.transferJob && (
+                  <p>Spotify 写入 {item.transferJob.added} / {item.transferJob.total} 首 · {transferJobLabels[item.transferJob.status]}
+                    {item.transferJob.resumeAt > 0 ? ` · ${new Date(item.transferJob.resumeAt).toLocaleString("zh-CN")} 后继续` : ""}
+                    {item.transferJob.error ? ` · ${item.transferJob.error}` : ""}
+                  </p>
+                )}
                 {item.aiJob && (
                   <p>
                     AI 本轮已处理 {item.aiJob.completed + (item.aiJob.blocked?.length || 0)} / {item.aiJob.total} 首 · 证据不足 {item.aiJob.blocked?.length || 0} 首 ·{" "}
@@ -2336,7 +2327,7 @@ export default function TransferApp() {
                   </button>
                   <button
                     className="text-button"
-                    disabled={!!busy || queue.pending}
+                    disabled={!!busy || queue.pending || (!!item.transferJob && item.transferJob.status !== "complete")}
                     onClick={() => {
                       if (
                         window.confirm(

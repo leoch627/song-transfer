@@ -1,40 +1,41 @@
-import { getAccessToken } from "@/lib/auth";
 import {
   AppError,
   errorResponse,
   readBody,
   requireSameOrigin,
 } from "@/lib/http";
-import { transferPlaylist } from "@/lib/spotify";
 import { taskOwner } from "@/lib/task-owner";
 import { taskStore } from "@/lib/task-store";
-export const maxDuration = 300;
+import { TransferQueue } from "@/lib/transfer-queue";
+
 export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
     const body = await readBody(request);
     if (typeof body.taskId !== "string")
       throw new AppError("请先创建后台任务并完成匹配。", 409);
-    const token = await getAccessToken();
+    if (body.action !== undefined && body.action !== "retry")
+      throw new AppError("未知写入操作。");
     const owner = (await taskOwner(true))!,
       store = taskStore();
-    const input = store.beginTransfer(body.taskId, owner);
-    try {
-      const result = await transferPlaylist(
-        token,
-        input.name,
-        input.uris,
-        input.isPublic,
+    store.owned(body.taskId, owner);
+    const account = store.account(owner);
+    if (!account) throw new AppError("请先连接 Spotify 账号。", 401);
+    if (!account.scope?.split(" ").includes("playlist-read-private"))
+      throw new AppError(
+        "请重新连接 Spotify，授予读取私密歌单权限，以便后台核对写入进度。原任务和匹配结果会保留。",
+        403,
       );
-      store.finishTransfer(body.taskId, owner, result);
-      return Response.json(result, {
+    const queue = new TransferQueue(store);
+    if (body.action === "retry") queue.retry(body.taskId, owner);
+    else queue.enqueue(body.taskId, owner);
+    return Response.json(
+      { task: store.get(body.taskId, owner), quota: store.quota() },
+      {
+        status: 202,
         headers: { "Cache-Control": "no-store" },
-      });
-    } catch (error) {
-      if (error instanceof AppError && [401, 403, 429].includes(error.status))
-        store.finishTransfer(body.taskId, owner, null, true);
-      throw error;
-    }
+      },
+    );
   } catch (error) {
     return errorResponse(error);
   }

@@ -19,14 +19,15 @@ export function mergeTaskSnapshot(
       : match;
   });
   const workspace = { ...remote.workspace };
-  for (const key of ["name", "isPublic", "result", "writeStarted"] as const) {
+  for (const key of ["name", "isPublic"] as const) {
     if (
+      !remote.workspace.writeStarted &&
       JSON.stringify(local.workspace[key]) !==
       JSON.stringify(baseline.workspace[key])
     )
       Object.assign(workspace, { [key]: local.workspace[key] });
   }
-  // A write started on another device must always block a second submission.
-  if (remote.workspace.writeStarted) workspace.writeStarted = true;
+  // Only the server knows whether a write was accepted and how far it got.
+  // In particular, a rejected request must clear the old browser-only guard.
   return { matches, workspace };
 }

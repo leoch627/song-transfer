@@ -10,6 +10,7 @@ export async function GET() {
       connected:
         !!session && (session.expiresAt > Date.now() || !!session.refreshToken),
       redirectUri: redirectUri(),
+      writeReady: !!session?.scope?.split(" ").includes("playlist-read-private"),
     },
     { headers: { "Cache-Control": "no-store" } },
   );

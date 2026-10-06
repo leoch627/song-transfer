@@ -3120,3 +3120,7 @@ main {
     font-size: 0;
   }
 }
+
+.transfer-progress-body { min-width: 0; }
+.transfer-progress .task-mini-progress { margin: 10px 0; }
+.transfer-progress .secondary-button { margin-top: 10px; }

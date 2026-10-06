@@ -42,6 +42,7 @@ export async function GET(request: Request) {
       accessToken: data.access_token,
       refreshToken: data.refresh_token || "",
       expiresAt: Date.now() + data.expires_in * 1000,
+      scope: data.scope,
     };
     taskStore().saveAccount((await taskOwner(true))!, session);
     await setEncryptedCookie(SESSION_COOKIE, session, 60 * 60 * 24 * 7);

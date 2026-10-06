@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       client_id: process.env.SPOTIFY_CLIENT_ID!,
       response_type: "code",
       redirect_uri: redirectUri(),
-      scope: "playlist-modify-private playlist-modify-public",
+      scope: "playlist-modify-private playlist-modify-public playlist-read-private",
       state,
       code_challenge_method: "S256",
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),

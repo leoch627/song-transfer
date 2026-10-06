@@ -15,6 +15,7 @@ import type {
 } from "./task-types";
 import type { SearchCheckpoint, TransferResult } from "./spotify";
 import { AiTaskQueue } from "./ai-task-queue";
+import { TransferQueue } from "./transfer-queue";
 
 export const DAY = 86400000;
 type Row = {
@@ -70,6 +71,7 @@ export class TaskStore {
       CREATE INDEX IF NOT EXISTS auth_attempts_scope ON auth_attempts(scope,at);
       CREATE TABLE IF NOT EXISTS task_migrations (name TEXT PRIMARY KEY);`);
     AiTaskQueue.initialize(this.db);
+    TransferQueue.initialize(this.db);
     this.transaction(() => {
       const migration = this.db
         .prepare("INSERT OR IGNORE INTO task_migrations(name) VALUES(?)")
@@ -326,6 +328,7 @@ export class TaskStore {
     return {
       id: row.id,
       aiJob: new AiTaskQueue(this).summary(row.id),
+      transferJob: new TransferQueue(this).summary(row.id),
       name: JSON.parse(row.workspace).name,
       status: row.status,
       ...counts,
@@ -372,6 +375,9 @@ export class TaskStore {
     this.transaction(() => {
       this.owned(id, owner);
       if (action === "delete") {
+        const write = new TransferQueue(this).summary(id);
+        if (write && write.status !== "complete")
+          throw new AppError("后台写入尚未完成，请保留任务以追踪进度和避免重复迁移。", 409);
         this.db
           .prepare("DELETE FROM tasks WHERE id=? AND owner=?")
           .run(id, owner);
@@ -396,6 +402,8 @@ export class TaskStore {
       const original = JSON.parse(
         this.owned(id, owner).workspace,
       ) as TaskWorkspace;
+      // Once submitted, selections and settings are frozen across all devices.
+      if (original.writeStarted) return;
       for (const { index, match } of updates)
         this.db
           .prepare(
@@ -478,41 +486,40 @@ export class TaskStore {
   }
   beginTransfer(id: string, owner: string) {
     return this.transaction(() => {
-      const task = this.get(id, owner);
-      if (task.workspace.writeStarted)
-        throw new AppError(
-          "这个任务已经开始迁移，请先检查已保存结果和 Spotify 歌单，避免重复写入。",
-          409,
-        );
-      if (task.completed !== task.total)
-        throw new AppError("请等待全部歌曲匹配完成。", 409);
-      if (
-        task.aiJob &&
-        (task.aiJob.current.length ||
-          ["queued", "running", "waiting"].includes(task.aiJob.status))
-      )
-        throw new AppError(
-          "请等待 AI 复核完成，或暂停复核并等待在途结果保存后再迁移。",
-          409,
-        );
-      const uris = task.matches
-        .filter((m) => m.included && m.selected && m.status === "matched")
-        .map((m) => m.selected!.uri);
-      if (!uris.length || !task.workspace.name.trim())
-        throw new AppError("请填写歌单名称并选择歌曲。");
-      this.db
-        .prepare("UPDATE tasks SET workspace=?,updated_at=? WHERE id=?")
-        .run(
-          JSON.stringify({ ...task.workspace, writeStarted: true }),
-          this.now(),
-          id,
-        );
-      return {
-        name: task.workspace.name,
-        isPublic: task.workspace.isPublic,
-        uris,
-      };
+      const input = this.transferInput(id, owner);
+      this.db.prepare("UPDATE tasks SET workspace=json_set(workspace,'$.writeStarted',json('true')),updated_at=? WHERE id=?")
+        .run(this.now(), id);
+      return input;
     });
+  }
+  transferInput(id: string, owner: string) {
+    const task = this.get(id, owner);
+    if (task.workspace.writeStarted)
+      throw new AppError(
+        "这个任务已经开始迁移，请先检查已保存结果和 Spotify 歌单，避免重复写入。",
+        409,
+      );
+    if (task.completed !== task.total)
+      throw new AppError("请等待全部歌曲匹配完成。", 409);
+    if (
+      task.aiJob &&
+      (task.aiJob.current.length ||
+        ["queued", "running", "waiting"].includes(task.aiJob.status))
+    )
+      throw new AppError(
+        "请等待 AI 复核完成，或暂停复核并等待在途结果保存后再迁移。",
+        409,
+      );
+    const uris = task.matches
+      .filter((m) => m.included && m.selected && m.status === "matched")
+      .map((m) => m.selected!.uri);
+    if (!uris.length || !task.workspace.name.trim())
+      throw new AppError("请填写歌单名称并选择歌曲。");
+    return {
+      name: task.workspace.name,
+      isPublic: task.workspace.isPublic,
+      uris,
+    };
   }
   finishTransfer(
     id: string,

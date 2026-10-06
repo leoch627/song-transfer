@@ -12,6 +12,7 @@ export type Session = {
   refreshToken: string;
   expiresAt: number;
   displayName?: string;
+  scope?: string;
 };
 export type OAuthState = { state: string; verifier: string };
 export function configured() {

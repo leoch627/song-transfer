@@ -18,6 +18,7 @@ export type QuotaStatus = {
 };
 export type TaskSummary = {
   aiJob?: AiJobSummary | null;
+  transferJob?: TransferJobSummary | null;
   id: string;
   name: string;
   status: TaskStatus;
@@ -31,8 +32,38 @@ export type TaskSummary = {
   error: string;
   updatedAt: number;
 };
+export type TransferJobSummary = {
+  status:
+    | "queued"
+    | "running"
+    | "waiting"
+    | "needs_auth"
+    | "failed"
+    | "blocked"
+    | "complete";
+  added: number;
+  total: number;
+  url: string;
+  verifying: boolean;
+  resumeAt: number;
+  error: string;
+};
+export const transferJobLabels: Record<TransferJobSummary["status"], string> = {
+  queued: "等待后台写入",
+  running: "后台写入中",
+  waiting: "等待后自动继续",
+  needs_auth: "请重新连接 Spotify",
+  failed: "写入已暂停",
+  blocked: "写入结果待核实",
+  complete: "迁移完成",
+};
 export type AiJobSummary = {
-  searching: { index: number; name: string; completed: number; query: string | null }[];
+  searching: {
+    index: number;
+    name: string;
+    completed: number;
+    query: string | null;
+  }[];
   blocked: { index: number; name: string; error: string }[];
   status:
     | "queued"

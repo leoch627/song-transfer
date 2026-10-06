@@ -2,6 +2,7 @@ import { runTaskStep } from "../lib/task-worker";
 import { taskStore } from "../lib/task-store";
 import { runAiTaskStep } from "../lib/ai-task-worker";
 import { aiConcurrency } from "../lib/ai-config";
+import { runTransferStep } from "../lib/transfer-worker";
 
 let stopping = false;
 process.on("SIGTERM", () => {
@@ -22,9 +23,10 @@ async function work(step: () => Promise<boolean>) {
   }
 }
 async function main() {
-  console.log("SongShift matching and AI background workers started.");
+  console.log("SongShift matching, AI and playlist write workers started.");
   await Promise.all([
     work(() => runTaskStep()),
+    work(() => runTransferStep()),
     ...Array.from({ length: aiConcurrency() }, () =>
       work(() => runAiTaskStep()),
     ),
