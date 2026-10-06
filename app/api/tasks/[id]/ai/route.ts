@@ -23,11 +23,13 @@ export async function POST(
     const store = taskStore(),
       queue = new AiTaskQueue(store);
     if (data.action === "pause") queue.pause(id, owner);
-    else if (data.action === "start" || data.action === "all") {
+    else if (data.action === "start" || data.action === "unmatched" || data.action === "all") {
+      // Old browser tabs may still send "all". Always narrow that request on the server.
+      const unmatched = data.action === "unmatched" || data.action === "all";
       if (!aiStatus().configured)
         throw new AppError("请先配置 AI 中转站。", 503);
-      if (data.action === "all" && !aiStatus().webSearch)
-        throw new AppError("全部联网查原唱需要开启联网核实。", 503);
+      if (unmatched && !aiStatus().webSearch)
+        throw new AppError("查原唱需要开启联网核实。", 503);
       await getAccessToken();
       if (
         data.indices !== undefined &&
@@ -41,7 +43,7 @@ export async function POST(
         owner,
         data.indices as number[] | undefined,
         data.webSearch === true,
-        data.action === "all",
+        unmatched,
       );
     } else throw new AppError("未知复核操作。");
     return Response.json(

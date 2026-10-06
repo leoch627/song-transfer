@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { TaskStore } from "../lib/task-store";
 import { AiTaskQueue } from "../lib/ai-task-queue";
 import { runAiTaskStep } from "../lib/ai-task-worker";
-import { makeMatch, scoreCandidate } from "../lib/matching";
+import { makeMatch, needsOriginalResearch, scoreCandidate } from "../lib/matching";
 import { AppError } from "../lib/http";
 import type { AiReviewResponse, Song } from "../lib/types";
 
@@ -303,34 +303,61 @@ test("legacy AI queue schema upgrades without changing pending songs, completed 
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("all-song research covers matched, excluded and missing songs, refreshes checkpoints, and preserves saved/manual choices", () => {
+test("bulk research queues only unresolved songs and preserves matched, unchecked and manual results", () => {
   const store = new TaskStore(":memory:");
   try {
-    const id = create(store, 3), queue = new AiTaskQueue(store);
-    const old = store.get(id, "alice").matches[0];
-    const c = scoreCandidate(old.source, { ...old.source, id: "x".repeat(22), uri: `spotify:track:${"x".repeat(22)}`, url: `https://open.spotify.com/track/${"x".repeat(22)}` });
-    store.save(id, "alice", [{ index: 0, match: { ...makeMatch(old.source, [c]), confirmedByUser: true } }]);
-    store.saveAiReview(id, "alice", 1, result);
-    queue.start(id, "alice", [1, 2]);
+    const id = create(store, 8), queue = new AiTaskQueue(store);
+    const original = store.get(id, "alice").matches;
+    store.save(id, "alice", [0, 1, 2].map((index) => {
+      const song = original[index].source;
+      const c = scoreCandidate(song, { ...song, id: "x".repeat(22), uri: `spotify:track:${"x".repeat(22)}`, url: `https://open.spotify.com/track/${"x".repeat(22)}` });
+      return { index, match: { ...makeMatch(song, [c]), included: index !== 1, confirmedByUser: index === 2 } };
+    }));
+    store.save(id, "alice", [{ index: 3, match: { ...original[3], confirmedByUser: true } }]);
+    store.saveAiReview(id, "alice", 4, result);
+    store.saveAiReview(id, "alice", 5, { ...result, decision: "uncertain" });
+    store.save(id, "alice", [{ index: 6, match: { ...original[6], status: "review" } }]);
+    queue.start(id, "alice", [0, 4, 7]);
     const pending = queue.claim(3)!;
     queue.checkpoint(pending, { version: 1, candidates: [], searches: [], rounds: 0, researchDone: true });
     queue.fail(pending, new AppError("授权已失效", 401));
     const before = store.get(id, "alice").matches;
+    assert.deepEqual(before.flatMap((m, i) => needsOriginalResearch(m) ? [i] : []), [4, 5, 6, 7]);
+    assert.equal(needsOriginalResearch({ ...before[7], status: "pending" }), false);
     assert.throws(() => queue.start(id, "bob", undefined, true, true), { status: 404 });
-    queue.start(id, "alice", undefined, true, true);
-    assert.equal(queue.summary(id)?.total, 3);
+    // Even explicit indices from a stale page cannot widen bulk research to matched songs.
+    queue.start(id, "alice", [0, 1, 2, 3], false, true);
+    assert.equal(queue.summary(id)?.total, 4);
     assert.equal(queue.summary(id)?.completed, 0);
     assert.deepEqual(store.get(id, "alice").matches, before);
-    for (let i = 0; i < 3; i++) {
+    for (const index of [4, 5, 6, 7]) {
       const claim = queue.claim(3)!;
+      assert.equal(claim.index, index);
       assert.equal(claim.forceSearch, true);
       assert.equal(claim.checkpoint, undefined);
       assert.throws(() => queue.start(id, "alice", undefined, true, true), { status: 409 });
       queue.complete(claim, result);
     }
     assert.equal(queue.summary(id)?.status, "complete");
-    assert.equal(store.get(id, "alice").matches[0].selected?.id, c.id);
-    assert.equal(store.get(id, "alice").matches[0].included, true);
+    assert.deepEqual(store.get(id, "alice").matches.slice(0, 4), before.slice(0, 4));
+  } finally { store.close(); }
+});
+
+test("empty unresolved scope does not reset a paused queue or resume its matched songs", () => {
+  const store = new TaskStore(":memory:");
+  try {
+    const id = create(store, 1), queue = new AiTaskQueue(store);
+    queue.start(id, "alice");
+    queue.pause(id, "alice");
+    const song = store.get(id, "alice").matches[0].source;
+    const c = scoreCandidate(song, { ...song, id: "x".repeat(22), uri: `spotify:track:${"x".repeat(22)}`, url: `https://open.spotify.com/track/${"x".repeat(22)}` });
+    store.save(id, "alice", [{ index: 0, match: makeMatch(song, [c]) }]);
+    const before = store.get(id, "alice");
+    const queueBefore = store.db.prepare("SELECT * FROM ai_job_songs").all();
+    assert.throws(() => queue.start(id, "alice", undefined, true, true), /没有待复核/);
+    assert.deepEqual(store.get(id, "alice"), before);
+    assert.deepEqual(store.db.prepare("SELECT * FROM ai_job_songs").all(), queueBefore);
+    assert.equal(queue.claim(3), null);
   } finally { store.close(); }
 });
 

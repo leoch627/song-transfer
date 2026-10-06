@@ -232,7 +232,7 @@ export function useTaskQueue(options: Options) {
     }
   }
   async function reviewAi(
-    action: "start" | "pause" | "all",
+    action: "start" | "pause" | "unmatched",
     indices?: number[],
     webSearch = false,
   ) {

@@ -4,7 +4,7 @@ import type { TaskStore } from "./task-store";
 import type { AiJobSummary } from "./task-types";
 import type { AiReviewResponse, AiSearchCheckpoint, Match } from "./types";
 import { AppError } from "./http";
-import { needsAiReview } from "./matching";
+import { needsAiReview, needsOriginalResearch } from "./matching";
 
 export type AiClaim = {
   taskId: string;
@@ -86,15 +86,15 @@ export class AiTaskQueue {
       .prepare("UPDATE tasks SET updated_at=MAX(updated_at+1,?) WHERE id=?")
       .run(this.store.now(), id);
   }
-  start(id: string, owner: string, indices?: number[], forceSearch = false, all = false) {
+  start(id: string, owner: string, indices?: number[], forceSearch = false, unmatched = false) {
     return this.store.transaction(() => {
       const task = this.store.get(id, owner);
       if (task.workspace.writeStarted)
         throw new AppError("任务已开始迁移，不能再复核。", 409);
-      if (all && task.completed !== task.total)
-        throw new AppError("请等基础匹配完成，再联网复核全部歌曲。", 409);
+      if (unmatched && task.completed !== task.total)
+        throw new AppError("请等基础匹配完成，再联网查未匹配歌曲的原唱。", 409);
       const positions =
-        (all ? task.matches.map((_, index) => index) : indices) ??
+        (unmatched ? task.matches.flatMap((m, i) => needsOriginalResearch(m) ? [i] : []) : indices) ??
         task.matches.flatMap((m, i) => (needsAiReview(m) ? [i] : []));
       if (
         positions.some(
@@ -107,14 +107,14 @@ export class AiTaskQueue {
         throw new AppError("请选择已匹配的有效歌曲。", 400);
       const db = this.store.db;
       const old = this.summary(id);
-      if (all && old && (old.current.length || ["queued", "running", "waiting"].includes(old.status)))
-        throw new AppError("请先暂停当前复核，等待在途结果保存后再全量联网复核。", 409);
-      if (!positions.length && (!old || old.completed === old.total))
+      if (unmatched && old && (old.current.length || ["queued", "running", "waiting"].includes(old.status)))
+        throw new AppError("请先暂停当前复核，等待在途结果保存后再联网查原唱。", 409);
+      if (!positions.length && (unmatched || !old || old.completed === old.total))
         throw new AppError("没有待复核的歌曲。", 400);
       // A finished batch starts a fresh counter; paused/failed batches retain checkpoints.
       // Explicit selections must not resume songs from a previously paused batch.
       // Completed reviews remain in task_songs until each replacement succeeds.
-      if (all || (indices && old && !old.current.length && !["queued", "running", "waiting"].includes(old.status)) ||
+      if (unmatched || (indices && old && !old.current.length && !["queued", "running", "waiting"].includes(old.status)) ||
           (old?.status === "complete" && !old.blocked.length))
         db.prepare("DELETE FROM ai_jobs WHERE task_id=?").run(id);
       db.prepare(
@@ -126,7 +126,7 @@ export class AiTaskQueue {
         ON CONFLICT(task_id,position) DO UPDATE SET state='pending',force_search=excluded.force_search,error='',search_checkpoint=NULL
         WHERE ai_job_songs.state IN ('done','blocked') AND ?=1`);
       for (const index of new Set(positions))
-        insert.run(id, index, Number(forceSearch || all), Number(!!indices || all));
+        insert.run(id, index, Number(forceSearch || unmatched), Number(!!indices || unmatched));
       // Only an explicit user resume retries evidence-blocked songs. Normal claims skip them.
       if (!indices)
         db.prepare("UPDATE ai_job_songs SET state='pending',error='',search_checkpoint=NULL WHERE task_id=? AND state='blocked'").run(id);

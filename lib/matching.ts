@@ -314,6 +314,15 @@ export function matchesToCsv(
   );
 }
 
+// A matched song remains resolved even when the user has unchecked it for export.
+export function needsOriginalResearch(match: Match): boolean {
+  return (
+    !match.confirmedByUser &&
+    match.status !== "pending" &&
+    !(match.status === "matched" && match.selected)
+  );
+}
+
 export function needsAiReview(match: Match): boolean {
   return (
     !match.confirmedByUser &&

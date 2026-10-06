@@ -40,6 +40,7 @@ import {
   applyAiReview,
   matchesToCsv,
   needsAiReview,
+  needsOriginalResearch,
   needsArtistResearch,
   visibleCandidates,
   excludedCandidateDetails,
@@ -461,14 +462,16 @@ export default function TransferApp() {
   const reviewCandidates = review ? visibleCandidates(review) : [];
   const excludedCandidates = review ? excludedCandidateDetails(review) : [];
   const aiPending = matches.filter(needsAiReview);
+  const aiUnmatched = matches.filter(needsOriginalResearch);
   const aiUnverified = matches.filter(
     (m) =>
+      needsOriginalResearch(m) &&
       m.aiReview &&
       !m.aiReview.research &&
       needsArtistResearch(m.source, m.candidates),
   );
   const aiReviewed = matches.filter((m) => m.aiReview);
-  const aiSearchAgain = matches.filter((m) => !m.confirmedByUser &&
+  const aiSearchAgain = matches.filter((m) => needsOriginalResearch(m) &&
     (m.aiReview?.decision === "skip" || m.aiReview?.decision === "uncertain"));
   const aiCounts = {
     match: aiReviewed.filter((m) => m.aiReview?.decision === "match").length,
@@ -1630,11 +1633,11 @@ export default function TransferApp() {
                       </button>
                       {!demo && ai.webSearch && (
                         <button
-                          disabled={!!busy || queue.pending || writeStarted || serverAiActive || serverAiDraining || completed !== matches.length}
-                          onClick={() => void queue.reviewAi("all")}
+                          disabled={!!busy || queue.pending || writeStarted || serverAiActive || serverAiDraining || completed !== matches.length || !aiUnmatched.length}
+                          onClick={() => void queue.reviewAi("unmatched")}
                         >
                           <Search size={14} />
-                          全部联网查原唱（{matches.length} 首）
+                          未匹配歌曲联网查原唱（{aiUnmatched.length} 首）
                         </button>
                       )}
                       {!demo && aiSearchAgain.length > 0 && (
@@ -1652,12 +1655,12 @@ export default function TransferApp() {
                           onClick={() => runAiReview(aiUnverified, true)}
                         >
                           <Search size={14} />
-                          联网复查已有建议（{aiUnverified.length}）
+                          联网复查未匹配建议（{aiUnverified.length}）
                         </button>
                       )}
                     </div>
                     {!demo && ai.webSearch && (
-                      <p>全量复核覆盖已匹配、已排除和未找到的歌曲，逐首联网核实并重新搜索 Spotify；旧结果保留到新结果保存，人工选择保留。后台运行，可随时暂停。{(serverAiActive || serverAiDraining) ? "开始全量复核前，请先暂停当前复核并等待在途结果保存。" : ""}</p>
+                      <p>仅对未匹配好的歌曲（待确认、已排除、未找到）联网查原唱，再搜索 Spotify。已匹配和人工处理过的歌曲保留，不重复查；旧结果保留到新结果保存。后台运行，可随时暂停。{(serverAiActive || serverAiDraining) ? "开始前，请先暂停当前复核并等待在途结果保存。" : ""}</p>
                     )}
                     <p>
                       已自动选择{" "}
