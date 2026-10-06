@@ -426,6 +426,7 @@ export class TaskStore {
     index: number,
     result: AiReviewResponse,
     afterSave?: () => void,
+    trustedSearch = false,
   ) {
     return this.transaction(() => {
       const task = this.get(id, owner);
@@ -456,6 +457,7 @@ export class TaskStore {
       for (const candidate of [
         ...(match.excludedCandidates || []),
         ...match.candidates,
+        ...(trustedSearch ? result.excludedCandidates || [] : []),
       ])
         if (!candidates.some((c) => c.id === candidate.id))
           archive.set(candidate.id, candidate);

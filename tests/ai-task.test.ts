@@ -295,7 +295,7 @@ test("legacy AI queue schema upgrades without changing pending songs, completed 
     queue.complete(queue.claim(3)!, result);
     queue.fail(queue.claim(3)!, new AppError("没有来源", 502));
     const saved = store.get(id, "alice");
-    store.db.exec("ALTER TABLE ai_job_songs DROP COLUMN error");
+    store.db.exec("ALTER TABLE ai_job_songs DROP COLUMN error; ALTER TABLE ai_job_songs DROP COLUMN search_checkpoint");
     const before = store.db.prepare("SELECT * FROM ai_job_songs").all();
     store.close(); store = new TaskStore(join(dir, "tasks.sqlite"));
     assert.deepEqual(store.db.prepare("SELECT task_id,position,state,force_search,lease,lease_until FROM ai_job_songs").all(), before);

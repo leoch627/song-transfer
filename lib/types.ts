@@ -47,6 +47,24 @@ export type AiReview = {
   reviewVersion?: number;
   research?: ArtistResearch;
   searchWarning?: string;
+  spotifySearches?: SpotifySearchRecord[];
+};
+export type SpotifySearchRecord = {
+  query: string;
+  reason: string;
+  candidateIds: string[];
+  searchedAt: number;
+};
+export type AiSearchCheckpoint = {
+  version: 1;
+  candidates: Candidate[];
+  searches: SpotifySearchRecord[];
+  rounds: number;
+  pending?: { query: string; reason: string };
+  finished?: boolean;
+  research?: ArtistResearch;
+  researchDone?: boolean;
+  researchWarning?: string;
 };
 export type ArtistResearch = {
   summary: string;

@@ -3,8 +3,9 @@ import { needsArtistResearch, researchArtist } from "./ai-research";
 import { AppError } from "./http";
 import { excludedVersion, normalize, rankedCandidates } from "./matching";
 import { searchCandidates } from "./spotify";
+import { searchAndReviewSong } from "./ai-search-agent";
 import type { TaskStore } from "./task-store";
-import type { AiReviewResponse, Candidate, Song } from "./types";
+import type { AiReviewResponse, AiSearchCheckpoint, Candidate, Song } from "./types";
 
 export async function reviewSong(
   source: Song,
@@ -14,6 +15,9 @@ export async function reviewSong(
     token?: string;
     store?: TaskStore;
     canExpand?: boolean;
+    autonomousSearch?: boolean;
+    checkpoint?: AiSearchCheckpoint;
+    onProgress?: (checkpoint: AiSearchCheckpoint) => void;
   } = {},
   dependencies = {
     research: researchArtist,
@@ -21,6 +25,8 @@ export async function reviewSong(
     review: reviewWithAi,
   },
 ): Promise<AiReviewResponse> {
+  if (options.autonomousSearch && options.canExpand && options.store && options.token)
+    return searchAndReviewSong(source, candidates, { ...options, store: options.store, token: options.token });
   candidates = rankedCandidates(source, candidates).filter(
     (c) => !excludedVersion(source, c),
   );

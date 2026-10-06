@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { TaskStore } from "./task-store";
 import type { AiJobSummary } from "./task-types";
-import type { AiReviewResponse, Match } from "./types";
+import type { AiReviewResponse, AiSearchCheckpoint, Match } from "./types";
 import { AppError } from "./http";
 import { needsAiReview } from "./matching";
 
@@ -13,6 +13,7 @@ export type AiClaim = {
   lease: string;
   match: Match;
   forceSearch: boolean;
+  checkpoint?: AiSearchCheckpoint;
 };
 const LEASE_MS = 120000;
 
@@ -33,6 +34,8 @@ export class AiTaskQueue {
       const columns = db.prepare("PRAGMA table_info(ai_job_songs)").all() as { name: string }[];
       if (!columns.some((c) => c.name === "error"))
         db.exec("ALTER TABLE ai_job_songs ADD COLUMN error TEXT NOT NULL DEFAULT ''");
+      if (!columns.some((c) => c.name === "search_checkpoint"))
+        db.exec("ALTER TABLE ai_job_songs ADD COLUMN search_checkpoint TEXT");
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -62,6 +65,12 @@ export class AiTaskQueue {
     const blocked = db.prepare(`SELECT j.position AS 'index', json_extract(s.source,'$.name') AS name,j.error
       FROM ai_job_songs j JOIN task_songs s ON s.task_id=j.task_id AND s.position=j.position
       WHERE j.task_id=? AND j.state='blocked' ORDER BY j.position`).all(id) as AiJobSummary["blocked"];
+    const searching = db.prepare(`SELECT j.position AS 'index',json_extract(s.source,'$.name') AS name,
+      json_array_length(json_extract(j.search_checkpoint,'$.searches')) AS completed,
+      json_extract(j.search_checkpoint,'$.pending.query') AS query
+      FROM ai_job_songs j JOIN task_songs s ON s.task_id=j.task_id AND s.position=j.position
+      WHERE j.task_id=? AND j.state IN ('pending','running') AND j.search_checkpoint IS NOT NULL
+      ORDER BY j.position LIMIT 5`).all(id) as AiJobSummary["searching"];
     return {
       status: row.status,
       ...counts,
@@ -69,6 +78,7 @@ export class AiTaskQueue {
       resumeAt: row.resume_at,
       error: row.error,
       blocked,
+      searching,
     };
   }
   touch(id: string) {
@@ -106,13 +116,13 @@ export class AiTaskQueue {
       ).run(id);
       const insert =
         db.prepare(`INSERT INTO ai_job_songs(task_id,position,force_search) VALUES(?,?,?)
-        ON CONFLICT(task_id,position) DO UPDATE SET state='pending',force_search=excluded.force_search,error=''
+        ON CONFLICT(task_id,position) DO UPDATE SET state='pending',force_search=excluded.force_search,error='',search_checkpoint=NULL
         WHERE ai_job_songs.state IN ('done','blocked') AND ?=1`);
       for (const index of new Set(positions))
         insert.run(id, index, Number(forceSearch), Number(!!indices));
       // Only an explicit user resume retries evidence-blocked songs. Normal claims skip them.
       if (!indices)
-        db.prepare("UPDATE ai_job_songs SET state='pending',error='' WHERE task_id=? AND state='blocked'").run(id);
+        db.prepare("UPDATE ai_job_songs SET state='pending',error='',search_checkpoint=NULL WHERE task_id=? AND state='blocked'").run(id);
       const cooldown = db
         .prepare("SELECT until_at FROM ai_cooldown WHERE id=1")
         .get() as { until_at: number } | undefined;
@@ -151,7 +161,7 @@ export class AiTaskQueue {
       if (active.n >= limit) return null;
       const item = db
         .prepare(
-          `SELECT j.task_id AS taskId,j.position AS idx,t.owner,s.match,j.force_search AS forceSearch
+          `SELECT j.task_id AS taskId,j.position AS idx,t.owner,s.match,j.force_search AS forceSearch,j.search_checkpoint AS checkpoint
         FROM ai_job_songs j JOIN ai_jobs a ON a.task_id=j.task_id JOIN tasks t ON t.id=j.task_id
         JOIN task_songs s ON s.task_id=j.task_id AND s.position=j.position
         WHERE a.status IN ('queued','running','waiting') AND a.resume_at<=? AND j.state IN ('pending','running') AND j.lease_until<=?
@@ -165,6 +175,7 @@ export class AiTaskQueue {
             owner: string;
             match: string;
             forceSearch: number;
+            checkpoint: string | null;
           }
         | undefined;
       if (!item) return null;
@@ -183,6 +194,7 @@ export class AiTaskQueue {
         lease,
         match: JSON.parse(item.match),
         forceSearch: !!item.forceSearch,
+        checkpoint: item.checkpoint ? JSON.parse(item.checkpoint) : undefined,
       };
     });
   }
@@ -192,6 +204,14 @@ export class AiTaskQueue {
         "UPDATE ai_job_songs SET lease_until=? WHERE task_id=? AND position=? AND lease=? AND state='running'",
       )
       .run(this.store.now() + LEASE_MS, item.taskId, item.index, item.lease);
+  }
+  checkpoint(item: AiClaim, progress: AiSearchCheckpoint) {
+    this.store.transaction(() => {
+      const saved = this.store.db.prepare(`UPDATE ai_job_songs SET search_checkpoint=?
+        WHERE task_id=? AND position=? AND lease=? AND state='running'`).run(JSON.stringify(progress), item.taskId, item.index, item.lease);
+      if (!saved.changes) throw new AppError("复核任务已被其他工作进程接管。", 409);
+      this.touch(item.taskId);
+    });
   }
   complete(item: AiClaim, result: AiReviewResponse) {
     // Result and queue checkpoint share one transaction, including manual-choice preservation.
@@ -206,7 +226,7 @@ export class AiTaskQueue {
         throw new AppError("复核任务已被其他工作进程接管。", 409);
       this.finishIfDrained(item.taskId);
       this.touch(item.taskId);
-    });
+    }, true);
   }
   private finishIfDrained(id: string) {
     this.store.db.prepare(`UPDATE ai_jobs SET status='complete',error='',resume_at=0 WHERE task_id=?
@@ -233,7 +253,7 @@ export class AiTaskQueue {
       const resume = wait
         ? this.store.now() + (error.retryAfter || 60) * 1000
         : 0;
-      if (wait)
+      if (wait && error.reason !== "SPOTIFY_SEARCH_RATE_LIMITED")
         db.prepare(
           `INSERT INTO ai_cooldown VALUES(1,?) ON CONFLICT(id) DO UPDATE SET until_at=MAX(until_at,excluded.until_at)`,
         ).run(resume);

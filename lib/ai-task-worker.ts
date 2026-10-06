@@ -31,6 +31,9 @@ export async function runAiTaskStep(
         token,
         store,
         canExpand: true,
+        autonomousSearch: true,
+        checkpoint: item.checkpoint,
+        onProgress: (checkpoint) => queue.checkpoint(item, checkpoint),
       },
     );
     queue.complete(item, result);

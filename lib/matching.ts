@@ -286,11 +286,12 @@ export function matchesToCsv(
     match.aiReview?.research?.originalArtist,
     match.aiReview?.research?.summary,
     match.aiReview?.research?.sources.map((s) => s.url).join(" | "),
+    match.aiReview?.spotifySearches?.map((s) => `${s.query} [${s.candidateIds.length}] ${s.reason}`).join(" | "),
   ]);
   return (
     "\uFEFF" +
     [
-      `${provider}_name,${provider}_artist,spotify_name,spotify_artist,spotify_url,score,duration_diff_ms,status,included,ai_decision,ai_candidate_id,ai_reason,ai_match_kind,original_artist,research_summary,research_sources`,
+      `${provider}_name,${provider}_artist,spotify_name,spotify_artist,spotify_url,score,duration_diff_ms,status,included,ai_decision,ai_candidate_id,ai_reason,ai_match_kind,original_artist,research_summary,research_sources,spotify_searches`,
       ...rows.map((row) => row.map(escape).join(",")),
     ].join("\r\n")
   );

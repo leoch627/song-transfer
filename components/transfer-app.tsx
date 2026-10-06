@@ -467,6 +467,8 @@ export default function TransferApp() {
       needsArtistResearch(m.source, m.candidates),
   );
   const aiReviewed = matches.filter((m) => m.aiReview);
+  const aiSearchAgain = matches.filter((m) => !m.confirmedByUser &&
+    (m.aiReview?.decision === "skip" || m.aiReview?.decision === "uncertain"));
   const aiCounts = {
     match: aiReviewed.filter((m) => m.aiReview?.decision === "match").length,
     skip: aiReviewed.filter((m) => m.aiReview?.decision === "skip").length,
@@ -1532,6 +1534,13 @@ export default function TransferApp() {
                     {serverAiJob?.error && (
                       <p className="task-error">{serverAiJob.error}</p>
                     )}
+                    {!!serverAiJob?.searching?.length && (
+                      <div className="ai-data-note">
+                        {serverAiJob.searching.map((s) => (
+                          <p key={s.index}>《{s.name}》：已搜索 {s.completed} 轮{s.query ? ` · 当前关键词：${s.query}` : " · 正在分析候选"}</p>
+                        ))}
+                      </div>
+                    )}
                     {serverAiActive || serverAiDraining ? (
                       <button
                         className="ai-button"
@@ -1583,7 +1592,7 @@ export default function TransferApp() {
                     )}
                     <span className="ai-data-note">
                       AI
-                      确认后自动选择并勾选，烟嗓等不符版本会排除。歌手别名先联网核实；后台复核可在关闭网页后继续，回来后自动同步进度和结果。
+                      会主动搜索 Spotify，根据结果调整关键词，确认后自动选择。歌手别名先联网核实；每首最多 6 轮搜索，限流后自动续跑，关闭网页后继续。
                     </span>
                     {serverAiBlocked.length > 0 && (
                       <details className="ai-evidence-errors">
@@ -1649,6 +1658,15 @@ export default function TransferApp() {
                         <ArrowDownToLine size={14} />
                         导出复核结果
                       </button>
+                      {!demo && aiSearchAgain.length > 0 && (
+                        <button
+                          disabled={!!busy || queue.pending || writeStarted || serverAiActive || serverAiDraining}
+                          onClick={() => runAiReview(aiSearchAgain)}
+                        >
+                          <Search size={14} />
+                          AI 重新搜索已排除 / 不确定（{aiSearchAgain.length}）
+                        </button>
+                      )}
                       {!demo && ai.webSearch && aiUnverified.length > 0 && (
                         <button
                           disabled={!!busy || writeStarted}
@@ -2391,7 +2409,7 @@ export default function TransferApp() {
                 {busy === "ai"
                   ? "正在复核…"
                   : review.aiReview
-                    ? "重新复核"
+                    ? "AI 重新搜索并复核"
                     : "请 AI 帮我看看"}
               </button>
               {!demo && ai.webSearch && (
@@ -2448,6 +2466,23 @@ export default function TransferApp() {
                 )}
                 {review.aiReview.searchWarning && (
                   <p className="task-error">{review.aiReview.searchWarning}</p>
+                )}
+                {!!review.aiReview.spotifySearches?.length && (
+                  <details className="ai-research">
+                    <summary>查看 Spotify 搜索记录（{review.aiReview.spotifySearches.length} 轮）</summary>
+                    <ol>
+                      {review.aiReview.spotifySearches.map((search, index) => (
+                        <li key={index}>
+                          <strong>{search.query}</strong>
+                          <p>{search.reason} · 找到 {search.candidateIds.length} 个候选</p>
+                          {search.candidateIds.map((id) => {
+                            const candidate = [...review.candidates, ...(review.excludedCandidates || [])].find((c) => c.id === id);
+                            return <p key={id}><a href={`https://open.spotify.com/track/${id}`} target="_blank" rel="noreferrer">{candidate ? `${candidate.name} · ${candidate.artists.join(" / ")}` : "在 Spotify 查看候选"}</a></p>;
+                          })}
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
                 )}
                 <span>
                   {review.aiReview.model} · 判断把握：
