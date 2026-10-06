@@ -140,3 +140,28 @@ test("queries are deduplicated and unique searches have a bounded budget", async
     assert.equal(searches, 6); assert.equal(result.spotifySearches?.length, 6);
   } finally { store.close(); }
 });
+
+test("forced web research searches the clean original title and verified aliases before accepting an old exclusion", async () => {
+  const old = process.env.AI_WEB_SEARCH; process.env.AI_WEB_SEARCH = "1";
+  const store = new TaskStore(":memory:");
+  const song = { ...source, name: "Go Again (feat. ELYSA)", artists: ["King CAAN", "ELYSA"], album: "Go Again", durationMs: 179160 };
+  const correct = scoreCandidate(song, { ...song, name: "Go Again", id: "g".repeat(22), uri: `spotify:track:${"g".repeat(22)}`, url: `https://open.spotify.com/track/${"g".repeat(22)}` });
+  const queries: string[] = [];
+  let researchCount = 0, checkpoint: AiSearchCheckpoint | undefined;
+  const deps = {
+    research: async () => { researchCount++; return { ...evidence, queries: [{ title: "Go Again", artist: "King CAAN" }, { title: "Go Again", artist: "ELYSA" }] }; },
+    choose: async () => null,
+    search: async (_t: string, _s: Song, q: string) => { queries.push(q); if (q.includes('artist:"ELYSA"') && queries.length === 2) throw new AppError("限流", 429, 1); return [correct]; },
+    review: async (_s: Song, candidates: Candidate[]) => { assert.ok(candidates.some(c=>c.id===correct.id)); return advice(correct); },
+  };
+  try {
+    await assert.rejects(searchAndReviewSong(song, [], { store, token: "t", forceSearch: true, onProgress: s=>{checkpoint=s;} }, deps), { status: 429 });
+    assert.equal(checkpoint?.pending?.query, 'track:"Go Again" artist:"ELYSA"');
+    store.db.exec("DELETE FROM search_cooldown");
+    const review = await searchAndReviewSong(song, [], { store, token: "t", forceSearch: true, checkpoint }, deps);
+    assert.equal(researchCount, 1);
+    assert.deepEqual(queries, ['track:"Go Again" artist:"King CAAN"', 'track:"Go Again" artist:"ELYSA"', 'track:"Go Again" artist:"ELYSA"']);
+    assert.equal(review.candidateId, correct.id);
+    assert.equal(review.spotifySearches?.length, 2);
+  } finally { store.close(); if (old === undefined) delete process.env.AI_WEB_SEARCH; else process.env.AI_WEB_SEARCH = old; }
+});

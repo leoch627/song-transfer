@@ -232,12 +232,12 @@ export function useTaskQueue(options: Options) {
     }
   }
   async function reviewAi(
-    action: "start" | "pause",
+    action: "start" | "pause" | "all",
     indices?: number[],
     webSearch = false,
   ) {
     if (pending) return;
-    const id = state.current.id || (action === "start" ? await start() : null);
+    const id = state.current.id || (action !== "pause" ? await start() : null);
     if (!id) return;
     setPending(true);
     try {

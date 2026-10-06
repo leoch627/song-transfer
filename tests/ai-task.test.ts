@@ -302,3 +302,51 @@ test("legacy AI queue schema upgrades without changing pending songs, completed 
     assert.deepEqual(store.get(id, "alice"), saved);
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("all-song research covers matched, excluded and missing songs, refreshes checkpoints, and preserves saved/manual choices", () => {
+  const store = new TaskStore(":memory:");
+  try {
+    const id = create(store, 3), queue = new AiTaskQueue(store);
+    const old = store.get(id, "alice").matches[0];
+    const c = scoreCandidate(old.source, { ...old.source, id: "x".repeat(22), uri: `spotify:track:${"x".repeat(22)}`, url: `https://open.spotify.com/track/${"x".repeat(22)}` });
+    store.save(id, "alice", [{ index: 0, match: { ...makeMatch(old.source, [c]), confirmedByUser: true } }]);
+    store.saveAiReview(id, "alice", 1, result);
+    queue.start(id, "alice", [1, 2]);
+    const pending = queue.claim(3)!;
+    queue.checkpoint(pending, { version: 1, candidates: [], searches: [], rounds: 0, researchDone: true });
+    queue.fail(pending, new AppError("授权已失效", 401));
+    const before = store.get(id, "alice").matches;
+    assert.throws(() => queue.start(id, "bob", undefined, true, true), { status: 404 });
+    queue.start(id, "alice", undefined, true, true);
+    assert.equal(queue.summary(id)?.total, 3);
+    assert.equal(queue.summary(id)?.completed, 0);
+    assert.deepEqual(store.get(id, "alice").matches, before);
+    for (let i = 0; i < 3; i++) {
+      const claim = queue.claim(3)!;
+      assert.equal(claim.forceSearch, true);
+      assert.equal(claim.checkpoint, undefined);
+      assert.throws(() => queue.start(id, "alice", undefined, true, true), { status: 409 });
+      queue.complete(claim, result);
+    }
+    assert.equal(queue.summary(id)?.status, "complete");
+    assert.equal(store.get(id, "alice").matches[0].selected?.id, c.id);
+    assert.equal(store.get(id, "alice").matches[0].included, true);
+  } finally { store.close(); }
+});
+
+test("a single explicit recheck does not resume unwanted songs from a paused batch", () => {
+  const store = new TaskStore(":memory:");
+  try {
+    const id = create(store, 3), queue = new AiTaskQueue(store);
+    queue.start(id, "alice");
+    const first = queue.claim(3)!; queue.complete(first, result);
+    queue.pause(id, "alice");
+    queue.start(id, "alice", [first.index], true);
+    assert.equal(queue.summary(id)?.total, 1);
+    const recheck = queue.claim(3)!;
+    assert.equal(recheck.index, first.index);
+    assert.equal(recheck.forceSearch, true);
+    queue.complete(recheck, result);
+    assert.equal(queue.claim(3), null);
+  } finally { store.close(); }
+});

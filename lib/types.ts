@@ -42,7 +42,7 @@ export type AiReview = {
   confidence: "high" | "medium" | "low";
   reason: string;
   model: string;
-  matchKind?: "same_recording" | "original_alternative" | "no_match";
+  matchKind?: "same_recording" | "original_alternative" | "live_alternative" | "no_match";
   reviewedAt?: number;
   reviewVersion?: number;
   research?: ArtistResearch;

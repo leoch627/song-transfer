@@ -1507,7 +1507,7 @@ export default function TransferApp() {
                     {!!serverAiJob?.searching?.length && (
                       <div className="ai-data-note">
                         {serverAiJob.searching.map((s) => (
-                          <p key={s.index}>《{s.name}》：已搜索 {s.completed} 轮{s.query ? ` · 当前关键词：${s.query}` : " · 正在分析候选"}</p>
+                          <p key={s.index}>《{s.name}》：已搜索 {s.completed} 轮{s.query ? ` · 当前关键词：${s.query}` : serverAiJob.current.includes(s.name) ? " · 正在分析候选" : " · 搜索进度已保存"}</p>
                         ))}
                       </div>
                     )}
@@ -1628,6 +1628,15 @@ export default function TransferApp() {
                         <ArrowDownToLine size={14} />
                         导出复核结果
                       </button>
+                      {!demo && ai.webSearch && (
+                        <button
+                          disabled={!!busy || queue.pending || writeStarted || serverAiActive || serverAiDraining || completed !== matches.length}
+                          onClick={() => void queue.reviewAi("all")}
+                        >
+                          <Search size={14} />
+                          全部联网查原唱（{matches.length} 首）
+                        </button>
+                      )}
                       {!demo && aiSearchAgain.length > 0 && (
                         <button
                           disabled={!!busy || queue.pending || writeStarted || serverAiActive || serverAiDraining}
@@ -1647,10 +1656,13 @@ export default function TransferApp() {
                         </button>
                       )}
                     </div>
+                    {!demo && ai.webSearch && (
+                      <p>全量复核覆盖已匹配、已排除和未找到的歌曲，逐首联网核实并重新搜索 Spotify；旧结果保留到新结果保存，人工选择保留。后台运行，可随时暂停。{(serverAiActive || serverAiDraining) ? "开始全量复核前，请先暂停当前复核并等待在途结果保存。" : ""}</p>
+                    )}
                     <p>
                       已自动选择{" "}
                       {matches.filter((m) => m.aiSelected && m.included).length}{" "}
-                      首。高把握且依据充分时直接选中；原唱替代会单独标注，不确定的歌曲暂不勾选。
+                      首。高把握时直接选中；同曲同歌手的其他现场也可自动选择，现场替代和原唱替代会标注。
                     </p>
                   </section>
                 )}
@@ -1845,11 +1857,15 @@ export default function TransferApp() {
                                     ? match.aiReview.matchKind ===
                                       "original_alternative"
                                       ? "AI 已选 · 原唱替代"
-                                      : "AI 已自动选择"
+                                      : match.aiReview.matchKind === "live_alternative"
+                                        ? "AI 已选 · 其他现场"
+                                        : "AI 已自动选择"
                                     : match.aiReview.matchKind ===
                                         "original_alternative"
                                       ? "原唱替代 · 待确认"
-                                      : aiDecisionLabels[
+                                      : match.aiReview.matchKind === "live_alternative"
+                                        ? "其他现场 · 待确认"
+                                        : aiDecisionLabels[
                                           match.aiReview.decision
                                         ]}
                                 </button>
@@ -2421,7 +2437,9 @@ export default function TransferApp() {
                     {review.aiSelected
                       ? review.aiReview.matchKind === "original_alternative"
                         ? "已自动选择原唱替代版本 · 非原曲录音"
-                        : "AI 已自动选择并勾选"
+                        : review.aiReview.matchKind === "live_alternative"
+                          ? "已自动选择其他现场版本 · 同曲同歌手"
+                          : "AI 已自动选择并勾选"
                       : aiDecisionLabels[review.aiReview.decision]}
                   </strong>
                 </p>

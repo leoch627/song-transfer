@@ -401,3 +401,31 @@ test("upgrade applies saved AI choices once while retaining jobs, search checkpo
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("different concerts by the same singer can be selected while studio, covers and remixes stay excluded from live alternatives", () => {
+  const concert = { ...source, name: "泪海（现场版）", album: "演唱会 2010", durationMs: 290000 };
+  const performance = { ...original, name: "淚海 - Live", album: "演唱会 2024 (Live)", artists: source.artists, durationMs: 350000 };
+  const liveAdvice: AiReview = { ...advice, candidateId: performance.id, matchKind: "live_alternative", research: undefined };
+  const match = makeMatch(concert, [performance]);
+  assert.equal(excludedVersion(concert, performance), false);
+  const selected = applyAiReview(match, liveAdvice);
+  assert.equal(selected.included, true);
+  assert.equal(selected.aiReview?.matchKind, "live_alternative");
+  for (const replacement of [
+    { ...performance, name: "泪海", album: "录音室专辑" },
+    { ...performance, name: "泪海 (Live Remix)" },
+    { ...performance, name: "泪海 (Live 烟嗓版)", artists: ["翻唱歌手"] },
+    { ...performance, artists: ["另一位歌手"] },
+  ]) assert.equal(applyAiReview(makeMatch(concert, [replacement]), liveAdvice).included, false);
+  const aliased = { ...performance, artists: original.artists };
+  assert.equal(applyAiReview(makeMatch(concert, [aliased]), liveAdvice).included, false);
+  assert.equal(applyAiReview(makeMatch(concert, [aliased]), { ...liveAdvice, research: advice.research }).included, true);
+  assert.equal(applyAiReview(makeMatch(source, [performance]), liveAdvice).included, false);
+});
+
+test("slowed and nightcore originals are not treated as interchangeable concert versions", () => {
+  for (const suffix of ["Slowed+Reverb", "Nightcore Edit", "Sped Up"]) {
+    const c = { ...original, name: `泪海 - ${suffix}`, album: `泪海 (${suffix})` };
+    assert.equal(excludedVersion(source, c), true);
+  }
+});

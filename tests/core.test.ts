@@ -269,7 +269,7 @@ test("relay receives only song metadata and uses the configured Luna model", asy
         },
       ]);
       assert.equal(result.candidateId, track.id);
-      assert.equal(result.reviewVersion, 2);
+      assert.equal(result.reviewVersion, 3);
       spy.mock.restore();
     }
   } finally {

@@ -8,7 +8,7 @@ import type {
 import { Converter } from "opencc-js/t2cn";
 
 const simplify = Converter({ from: "t", to: "cn" });
-export const AI_REVIEW_VERSION = 2;
+export const AI_REVIEW_VERSION = 3;
 
 export function uniqueCandidateRecordings(
   candidates: Candidate[],
@@ -54,6 +54,10 @@ function versions(name: string) {
     "instrumental",
     "karaoke",
     "cover",
+    "slowed",
+    "sped up",
+    "nightcore",
+    "reverb",
     "伴奏",
     "现场",
     "翻唱",
@@ -67,7 +71,19 @@ function versions(name: string) {
     .filter((tag) =>
       new RegExp(/^[a-z]+$/.test(tag) ? `\\b${tag}\\b` : tag, "i").test(text),
     )
+    .map((tag) => tag === "现场" ? "live" : tag)
+    .filter((tag, i, tags) => tags.indexOf(tag) === i)
+    .sort()
     .join("|");
+}
+
+export function isLive(song: Song) {
+  return versions(`${song.name} ${song.album}`).split("|").includes("live");
+}
+
+export function compatibleLiveVersion(source: Song, candidate: Song) {
+  return isLive(source) && isLive(candidate) &&
+    versions(`${source.name} ${source.album}`) === versions(`${candidate.name} ${candidate.album}`);
 }
 
 export function excludedVersion(source: Song, candidate: Song): boolean {
@@ -102,6 +118,7 @@ function automaticCandidate(
   if (advice.decision !== "match" || advice.confidence !== "high") return;
   const candidate = match.candidates.find((c) => c.id === advice.candidateId);
   if (!candidate || excludedVersion(match.source, candidate)) return;
+  if (advice.matchKind === "live_alternative" && !compatibleLiveVersion(match.source, candidate)) return;
   const differentArtist = !match.source.artists.some((a) =>
     candidate.artists.some((b) => normalize(a) === normalize(b)),
   );
@@ -302,7 +319,8 @@ export function needsAiReview(match: Match): boolean {
     !match.confirmedByUser &&
     (!match.aiReview ||
       (match.aiReview.decision === "uncertain" &&
-        (match.aiReview.reviewVersion || 0) < AI_REVIEW_VERSION &&
+        // Duplicate-release handling was introduced in review version 2.
+        (match.aiReview.reviewVersion || 0) < 2 &&
         uniqueCandidateRecordings(match.candidates).length <
           match.candidates.length) ||
       (match.aiReview.decision === "match" &&
