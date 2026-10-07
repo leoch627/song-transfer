@@ -100,14 +100,16 @@ Spotify 令牌在数据库中加密保存，以便后台刷新和跨天运行。
 
 ## 服务器部署
 
-当前站点：https://song.7227.org 。应用位于服务器 `/var/www/songtransfer`，以独立用户 `songtransfer` 运行，监听 `127.0.0.1:3002`。
+当前站点：https://songtransfer.net （旧地址 https://song.7227.org 301 跳转到新域名）。应用位于服务器 `/var/www/songtransfer`，以独立用户 `songtransfer` 运行，监听 `127.0.0.1:3002`。
 
+- 发布新版本：在服务器上以 root 运行 `bash /var/www/songtransfer/deploy/update.sh`。它会快进拉取 `main`、`npm ci`、构建、重启两个服务并检查网页服务是否响应；服务器上有未提交改动时会停止。
 - Nginx 虚拟主机：`/etc/nginx/sites-available/songtransfer`，配置副本见 `deploy/nginx.conf`。
 - systemd 服务：`songtransfer.service`，配置副本见 `deploy/songtransfer.service`。
 - 后台队列服务：`songtransfer-worker.service`，配置副本见 `deploy/songtransfer-worker.service`；数据库位于 `/var/lib/songtransfer/tasks.sqlite`，发布代码时不得覆盖这个目录。
-- 生产配置：`/etc/songtransfer.env`，仅 root 可读写。填写 `SPOTIFY_CLIENT_ID` 和 `AI_API_KEY` 后执行 `systemctl restart songtransfer`。
-- Spotify 应用需登记回调：`https://song.7227.org/api/auth/callback`。
-- HTTPS 证书由 Certbot 自动续期，续期后自动重载 Nginx。
+- 生产配置：`/etc/songtransfer.env`，仅 root 可读写，其中 `APP_URL=https://songtransfer.net`。填写 `SPOTIFY_CLIENT_ID` 和 `AI_API_KEY` 后执行 `systemctl restart songtransfer`。
+- Spotify 应用需登记回调：`https://songtransfer.net/api/auth/callback`。
+- HTTPS 证书由 Certbot（webroot 方式）自动续期，续期后自动重载 Nginx。
+- 域名迁移脚本 `deploy/switch-domain.sh` 只需运行一次：检查 DNS、申请证书、替换 Nginx 配置并更新 `APP_URL`，原文件均带时间戳备份。
 
 查看应用日志：`journalctl -u songtransfer -n 100 --no-pager`。
 
