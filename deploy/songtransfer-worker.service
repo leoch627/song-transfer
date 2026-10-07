@@ -1,5 +1,5 @@
 [Unit]
-Description=SongShift background matching tasks
+Description=SongTransfer background matching tasks
 After=network.target
 
 [Service]

@@ -89,4 +89,8 @@ export type AuthStatus = {
   connected: boolean;
   displayName?: string;
   redirectUri: string;
+  /** The user's own Spotify app Client ID, when they set one (not a secret). */
+  customClientId?: string;
+  /** Whether the site-wide default Spotify app is available. */
+  defaultAppAvailable?: boolean;
 };

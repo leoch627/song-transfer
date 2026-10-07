@@ -69,6 +69,7 @@ export class TaskStore {
       CREATE TABLE IF NOT EXISTS web_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS auth_attempts (scope TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS auth_attempts_scope ON auth_attempts(scope,at);
+      CREATE TABLE IF NOT EXISTS user_spotify_apps (owner TEXT PRIMARY KEY, client_id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_migrations (name TEXT PRIMARY KEY);`);
     AiTaskQueue.initialize(this.db);
     TransferQueue.initialize(this.db);
@@ -91,6 +92,31 @@ export class TaskStore {
           resumeAt ? "Spotify 暂时限流，到时自动重试。" : "",
           this.now(),
         );
+    });
+    this.transaction(() => {
+      const migration = this.db
+        .prepare("INSERT OR IGNORE INTO task_migrations(name) VALUES(?)")
+        .run("separate-write-cooldown");
+      if (!migration.changes) return;
+      // Writes used to wait on the shared search cooldown, which Spotify's daily
+      // search quota can hold for ~24h although writes are still accepted. Release
+      // those rate-limit waits; a real write 429 simply sets the new write cooldown.
+      const released = this.db
+        .prepare(
+          `SELECT task_id FROM transfer_jobs WHERE status='waiting' AND lease_until<=?
+          AND error LIKE 'Spotify 暂时限流%'`,
+        )
+        .all(this.now()) as { task_id: string }[];
+      for (const { task_id } of released) {
+        this.db
+          .prepare(
+            "UPDATE transfer_jobs SET status='queued',resume_at=0,error='' WHERE task_id=?",
+          )
+          .run(task_id);
+        this.db
+          .prepare("UPDATE tasks SET updated_at=MAX(updated_at+1,?) WHERE id=?")
+          .run(this.now(), task_id);
+      }
     });
     this.applySavedAiSelections();
   }
@@ -177,6 +203,24 @@ export class TaskStore {
       until_at=MAX(until_at,excluded.until_at),reason=excluded.reason`,
       )
       .run(this.now() + Math.max(1, seconds) * 1000, reason);
+  }
+  /** The user's own Spotify app Client ID, or "" to use the site default. */
+  spotifyClientId(owner: string) {
+    const row = this.db
+      .prepare("SELECT client_id FROM user_spotify_apps WHERE owner=?")
+      .get(owner) as { client_id: string } | undefined;
+    return row?.client_id || "";
+  }
+  setSpotifyClientId(owner: string, clientId: string) {
+    if (clientId)
+      this.db
+        .prepare(
+          `INSERT INTO user_spotify_apps(owner,client_id) VALUES(?,?)
+          ON CONFLICT(owner) DO UPDATE SET client_id=excluded.client_id`,
+        )
+        .run(owner, clientId);
+    else
+      this.db.prepare("DELETE FROM user_spotify_apps WHERE owner=?").run(owner);
   }
   saveAccount(owner: string, session: Session) {
     const secret = process.env.SESSION_SECRET;

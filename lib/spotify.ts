@@ -155,7 +155,7 @@ export async function transferPlaylist(
     body: JSON.stringify({
       name,
       public: isPublic,
-      description: "Imported from NetEase Cloud Music with SongShift 移调",
+      description: "Imported from NetEase Cloud Music with SongTransfer 移调",
     }),
   });
   const result: TransferResult = {

@@ -1,5 +1,6 @@
 "use client";
 
+import { OwnSpotifyApp } from "./own-spotify-app";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -886,9 +887,9 @@ export default function TransferApp() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <Link className="brand" href="/" aria-label="SongShift 首页">
+        <Link className="brand" href="/" aria-label="SongTransfer 首页">
           <BrandMark />
-          SongShift
+          SongTransfer
         </Link>
         <nav className="topnav" aria-label="主要导航">
           <button className="nav-item" onClick={() => setModal("history")}>
@@ -1917,6 +1918,18 @@ export default function TransferApp() {
               {auth.connected ? "断开 Spotify" : "连接 Spotify"}
             </button>
           )}
+          <OwnSpotifyApp
+            key={auth.customClientId || "default"}
+            auth={auth}
+            loggedIn={!!user}
+            onSaved={(clientId) =>
+              setAuth((old) => ({
+                ...old,
+                customClientId: clientId,
+                configured: !!clientId || !!old.defaultAppAvailable,
+              }))
+            }
+          />
           <div className="settings-netease">
             <h3>
               <Sparkles size={15} /> AI 歌曲复核
@@ -1944,7 +1957,7 @@ export default function TransferApp() {
       )}
       {modal === "account" && (
         <Modal
-          title={user ? "我的账号" : "登录 SongShift"}
+          title={user ? "我的账号" : "登录 SongTransfer"}
           onClose={() => setModal(null)}
         >
           {user ? (

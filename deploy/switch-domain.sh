@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-off: move SongShift from song.7227.org to songtransfer.net.
+# One-off: move SongTransfer from song.7227.org to songtransfer.net.
 # Run on the server as root AFTER the DNS A record points here and
 # AFTER deploy/update.sh has pulled the commit that contains this file:
 #   bash /var/www/songtransfer/deploy/switch-domain.sh

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pull the latest main, rebuild and restart SongShift.
+# Pull the latest main, rebuild and restart SongTransfer.
 # Run on the server as root:  bash /var/www/songtransfer/deploy/update.sh
 set -euo pipefail
 

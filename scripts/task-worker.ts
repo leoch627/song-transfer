@@ -23,7 +23,7 @@ async function work(step: () => Promise<boolean>) {
   }
 }
 async function main() {
-  console.log("SongShift matching, AI and playlist write workers started.");
+  console.log("SongTransfer matching, AI and playlist write workers started.");
   await Promise.all([
     work(() => runTaskStep()),
     work(() => runTransferStep()),

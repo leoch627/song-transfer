@@ -2,13 +2,16 @@ import { AppError } from "./http";
 import type { Session } from "./auth";
 import { taskStore, type TaskStore } from "./task-store";
 
-export async function requestSpotifyToken(params: Record<string, string>) {
+export async function requestSpotifyToken(
+  params: Record<string, string>,
+  clientId?: string,
+) {
   const response = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       ...params,
-      client_id: process.env.SPOTIFY_CLIENT_ID!,
+      client_id: clientId || process.env.SPOTIFY_CLIENT_ID!,
     }),
     cache: "no-store",
     signal: AbortSignal.timeout(20000),
@@ -50,10 +53,13 @@ export async function taskAccessToken(
       const latest = store.account(owner);
       if (!latest) throw new AppError("Spotify 已断开连接。", 401);
       if (latest.expiresAt > Date.now() + 60000) return latest.accessToken;
-      const data = await requestSpotifyToken({
-        grant_type: "refresh_token",
-        refresh_token: latest.refreshToken,
-      });
+      const data = await requestSpotifyToken(
+        {
+          grant_type: "refresh_token",
+          refresh_token: latest.refreshToken,
+        },
+        latest.clientId,
+      );
       const refreshed: Session = {
         ...latest,
         accessToken: data.access_token,

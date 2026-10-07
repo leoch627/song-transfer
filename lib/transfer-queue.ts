@@ -43,7 +43,26 @@ export class TransferQueue {
       task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
       status TEXT NOT NULL, data TEXT NOT NULL, resume_at INTEGER NOT NULL DEFAULT 0,
       error TEXT NOT NULL DEFAULT '', lease TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0
-    );`);
+    );
+    -- Spotify enforces a separate daily quota on /search (QUOTA_EXCEEDED with a
+    -- Retry-After of many hours) while playlist writes keep working, so playlist
+    -- writes track their own 429 wait instead of sharing search_cooldown.
+    CREATE TABLE IF NOT EXISTS write_cooldown (id INTEGER PRIMARY KEY CHECK(id=1), until_at INTEGER NOT NULL, reason TEXT NOT NULL);`);
+  }
+  /** Earliest time playlist writes may resume after a write 429 (0 = now). */
+  resumeAt() {
+    const row = this.store.db
+      .prepare("SELECT until_at FROM write_cooldown WHERE id=1")
+      .get() as { until_at: number } | undefined;
+    return row && row.until_at > this.store.now() ? row.until_at : 0;
+  }
+  cooldown(seconds: number, reason: string) {
+    this.store.db
+      .prepare(
+        `INSERT INTO write_cooldown VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET
+      until_at=MAX(until_at,excluded.until_at),reason=excluded.reason`,
+      )
+      .run(this.store.now() + Math.max(1, seconds) * 1000, reason);
   }
   summary(id: string): TransferJobSummary | null {
     const row = this.store.db
@@ -83,7 +102,7 @@ export class TransferQueue {
         foundId: "",
         verification: null,
       };
-      const resumeAt = this.store.quota().resumeAt;
+      const resumeAt = this.resumeAt();
       this.store.db
         .prepare(
           "INSERT INTO transfer_jobs(task_id,status,data,resume_at,error) VALUES(?,?,?,?,?)",
@@ -134,7 +153,7 @@ export class TransferQueue {
   claim(): TransferClaim | null {
     return this.store.transaction(() => {
       const now = this.store.now(),
-        cooldown = this.store.quota().resumeAt;
+        cooldown = this.resumeAt();
       if (cooldown > now) {
         const waiting = this.store.db
           .prepare(

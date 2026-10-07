@@ -64,7 +64,8 @@ function fixture(count = 205) {
     commit = true,
     rateLimit = false,
     deny = false,
-    nullItem = false;
+    nullItem = false,
+    opaqueSnapshots = false;
   let token = "one",
     user = "spotify-alice";
   const batches: number[] = [];
@@ -91,7 +92,10 @@ function fixture(count = 205) {
           lostCreate = false;
           throw new Error("Response lost");
         }
-        return metadata() as T;
+        return {
+          ...metadata(),
+          ...(opaqueSnapshots ? { snapshot_id: "create-response" } : {}),
+        } as T;
       }
       if (endpoint.startsWith("/me/playlists?"))
         return {
@@ -117,7 +121,11 @@ function fixture(count = 205) {
           lostAdd = false;
           throw new Error("Response lost");
         }
-        return { snapshot_id: remote.snapshot_id } as T;
+        return {
+          snapshot_id: opaqueSnapshots
+            ? `write-${remote.snapshot_id}`
+            : remote.snapshot_id,
+        } as T;
       }
       if (endpoint.includes("/items?")) {
         const offset = Number(
@@ -186,6 +194,9 @@ function fixture(count = 205) {
     },
     nullItem() {
       nullItem = true;
+    },
+    opaqueSnapshots() {
+      opaqueSnapshots = true;
     },
     close() {
       store.close();
@@ -424,17 +435,101 @@ test("auth expiry can resume but changing Spotify account cannot write to anothe
   }
 });
 
-test("existing global cooldown postpones writes without sending any Spotify requests", async () => {
+test("search quota cooldown does not postpone playlist writes", async () => {
   const f = fixture(2);
   try {
-    f.store.cooldown(120, "RATE_LIMITED");
+    f.store.cooldown(81569, "QUOTA_EXCEEDED");
     f.queue.enqueue(f.id, "alice");
-    assert.equal(f.queue.summary(f.id)?.status, "waiting");
-    assert.equal(await f.step(), false);
-    assert.equal(f.creates, 0);
-    f.advance();
+    assert.equal(f.queue.summary(f.id)?.status, "queued");
     await f.drain();
     assert.equal(f.queue.summary(f.id)?.status, "complete");
+    assert.equal(f.creates, 1);
+    assert.equal(f.remote.uris.length, 2);
+    // Search stays blocked until Spotify's own Retry-After.
+    assert.ok(f.store.quota().resumeAt > 0);
+    assert.throws(() => f.store.reserveSearch());
+  } finally {
+    f.close();
+  }
+});
+
+test("write 429 postpones only writes, not searches", async () => {
+  const f = fixture();
+  try {
+    f.queue.enqueue(f.id, "alice");
+    await f.step();
+    await f.step();
+    f.limit();
+    await f.step();
+    assert.equal(f.queue.summary(f.id)?.status, "waiting");
+    assert.equal(f.queue.resumeAt(), 1000 + 120000);
+    assert.equal(f.store.quota().resumeAt, 0);
+    assert.doesNotThrow(() => f.store.reserveSearch());
+    // Writes stay paused until the write Retry-After.
+    f.advance(1000);
+    assert.equal(await f.step(), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("upgrade releases writes held only by the old shared search cooldown", async () => {
+  const f = fixture(2);
+  try {
+    f.queue.enqueue(f.id, "alice");
+    f.store.cooldown(81569, "QUOTA_EXCEEDED");
+    f.store.db
+      .prepare(
+        "UPDATE transfer_jobs SET status='waiting',resume_at=?,error=? WHERE task_id=?",
+      )
+      .run(f.store.quota().resumeAt, "Spotify 暂时限流，到时自动开始后台写入。", f.id);
+    f.store.db
+      .prepare("DELETE FROM task_migrations WHERE name='separate-write-cooldown'")
+      .run();
+    f.reopen();
+    assert.equal(f.queue.summary(f.id)?.status, "queued");
+    assert.equal(f.queue.summary(f.id)?.resumeAt, 0);
+    await f.drain();
+    assert.equal(f.queue.summary(f.id)?.status, "complete");
+    // Runs once: a later write wait survives restarts.
+    f.store.db
+      .prepare("UPDATE transfer_jobs SET status='waiting',resume_at=?,error=? WHERE task_id=?")
+      .run(999999999, "Spotify 暂时限流，进度已保存，到时自动继续。", f.id);
+    f.reopen();
+    assert.equal(f.queue.summary(f.id)?.status, "waiting");
+  } finally {
+    f.close();
+  }
+});
+
+test("write responses with snapshot IDs that differ from GET still complete", async () => {
+  const f = fixture();
+  try {
+    f.opaqueSnapshots();
+    f.queue.enqueue(f.id, "alice");
+    await f.drain();
+    assert.equal(f.queue.summary(f.id)?.status, "complete");
+    assert.deepEqual(f.batches, [100, 100, 5]);
+    assert.equal(f.creates, 1);
+  } finally {
+    f.close();
+  }
+});
+
+test("external edit between batches is still detected via GET snapshots", async () => {
+  const f = fixture();
+  try {
+    f.opaqueSnapshots();
+    f.queue.enqueue(f.id, "alice");
+    await f.step(); // /me
+    await f.step(); // create
+    await f.step(); // check + append batch 1
+    await f.step(); // check adopts live snapshot + append batch 2
+    f.remote.uris.reverse(); // reorder keeps the count but changes the snapshot
+    f.remote.snapshot_id = "edited";
+    await f.step();
+    assert.equal(f.queue.summary(f.id)?.status, "blocked");
+    assert.deepEqual(f.batches, [100, 100]);
   } finally {
     f.close();
   }

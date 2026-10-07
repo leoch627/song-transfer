@@ -1,5 +1,5 @@
 [Unit]
-Description=SongShift playlist transfer
+Description=SongTransfer playlist transfer
 After=network.target
 
 [Service]

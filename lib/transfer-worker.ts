@@ -64,6 +64,20 @@ export async function runTransferStep(
       queue.save(claim, "queued");
       return true;
     }
+    // Snapshot IDs returned by write endpoints are not comparable with the one
+    // GET /playlists returns for the same state (observed in production: the
+    // create response and an immediate GET differ). After each acknowledged
+    // write, persist the progress, then record the live GET snapshot so the
+    // pre-batch check below compares GET with GET and still detects edits.
+    const adoptLiveSnapshot = async (status: "queued" | "complete") => {
+      s.snapshot = "";
+      queue.save(claim);
+      if (status === "queued") {
+        const live = await metadata();
+        if (playlistSize(live) === s.added) s.snapshot = live.snapshot_id;
+      }
+      queue.save(claim, status);
+    };
     const metadata = async (id = s.playlistId) => {
       const p = await read<PlaylistInfo>(
         `/playlists/${id}?fields=id,owner(id),snapshot_id,items(total),tracks(total)`,
@@ -159,10 +173,9 @@ export async function runTransferStep(
       if (!/^[A-Za-z0-9]{22}$/.test(p.id))
         throw new Error("Missing playlist ID");
       s.playlistId = p.id;
-      s.snapshot = p.snapshot_id || "";
       s.pending = "";
       writing = false;
-      queue.save(claim, "queued");
+      await adoptLiveSnapshot("queued");
       return true;
     }
     // Detect external edits between batches before appending any more tracks.
@@ -188,10 +201,9 @@ export async function runTransferStep(
     );
     if (!response.snapshot_id) throw new Error("Missing playlist snapshot");
     s.added += batch.length;
-    s.snapshot = response.snapshot_id;
     s.pending = "";
     writing = false;
-    queue.save(claim, s.added === s.uris.length ? "complete" : "queued");
+    await adoptLiveSnapshot(s.added === s.uris.length ? "complete" : "queued");
   } catch (error) {
     if (error instanceof AppError && error.reason === "LEASE_LOST") return true;
     // These responses explicitly reject the mutation. Timeouts and 5xx do not.
@@ -199,12 +211,14 @@ export async function runTransferStep(
       error instanceof AppError && [401, 403, 429].includes(error.status);
     if (writing && rejected) s.pending = "";
     if (error instanceof AppError && error.status === 429) {
-      store.cooldown(error.retryAfter || 60, error.reason || "RATE_LIMITED");
+      // Only the write wait: a write 429 must not stall matching/search, and a
+      // search 429 never blocks writes (see TransferQueue.initialize).
+      queue.cooldown(error.retryAfter || 60, error.reason || "RATE_LIMITED");
       queue.save(
         claim,
         "waiting",
         "Spotify 暂时限流，进度已保存，到时自动继续。",
-        store.quota().resumeAt,
+        queue.resumeAt(),
       );
     } else if (error instanceof AppError && error.status === 401) {
       queue.save(claim, "needs_auth", error.message);

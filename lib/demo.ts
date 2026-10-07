@@ -15,7 +15,7 @@ const records = [
 export const demoPlaylist: Playlist = {
   id: "demo",
   name: "把日子调成喜欢的频道",
-  creator: "SongShift 示例歌单",
+  creator: "SongTransfer 示例歌单",
   total: records.length,
   missing: 0,
   songs: records.map(([name, artist, album, durationMs], index) => ({
