@@ -6,13 +6,11 @@ import {
   ArrowDownToLine,
   ArrowRight,
   ArrowUpRight,
-  AudioLines,
   Check,
   CheckCheck,
   CheckCircle2,
   ChevronDown,
   CircleHelp,
-  Disc3,
   ExternalLink,
   FileMusic,
   Headphones,
@@ -22,10 +20,8 @@ import {
   ListMusic,
   LoaderCircle,
   LockKeyhole,
-  Menu,
   Music2,
   Pause,
-  Plus,
   Search,
   Settings2,
   ShieldCheck,
@@ -149,14 +145,17 @@ function SpotifyMark({ className = "" }: { className?: string }) {
     </svg>
   );
 }
-function NeteaseMark() {
+function BrandMark() {
   return (
-    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+    <svg className="brand-icon" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="currentColor" />
       <path
-        d="M19.5 5.5c-6.4-1.1-12 3.9-12 10.6 0 5.9 4.1 10.1 9.4 10.1 5.5 0 9.2-3.9 9.2-8.9 0-4.6-3.2-7.7-7-7.7-3.5 0-5.9 2.3-5.9 5.4 0 2.4 1.6 3.9 3.5 3.9 1.8 0 3.2-1.2 3.2-3.1V3.7"
-        stroke="currentColor"
-        strokeWidth="2.4"
+        d="M9 12.5h14l-4-4M23 19.5H9l4 4"
+        fill="none"
+        stroke="var(--marker)"
+        strokeWidth="2.6"
         strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -187,12 +186,9 @@ function Cover({
           }}
         />
       ) : (
-        <>
-          <span className="cover-orbit" />
-          <span className="cover-letter">
-            {large ? "SLOW\nDAYS" : name.slice(0, 1)}
-          </span>
-        </>
+        <span className="cover-letter" aria-hidden="true">
+          {name.slice(0, 1)}
+        </span>
       )}
     </div>
   );
@@ -265,7 +261,6 @@ export default function TransferApp() {
   const [result, setResult] = useState<TransferResult | null>(null);
   const [writeStarted, setWriteStarted] = useState(false);
   const [hydrated, setHydrated] = useState(false);
-  const [mobileNav, setMobileNav] = useState(false);
   const [retryAt, setRetryAt] = useState(0);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [aiFilter, setAiFilter] = useState<AiFilter>("all");
@@ -883,7 +878,6 @@ export default function TransferApp() {
     setWriteStarted(false);
     setDemo(false);
     setMessage(null);
-    setMobileNav(false);
     setInput("");
     setName("");
     setTaskId(null);
@@ -891,206 +885,45 @@ export default function TransferApp() {
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
+      <header className="topbar">
         <Link className="brand" href="/" aria-label="SongShift 首页">
-          <span className="brand-icon">
-            <AudioLines size={23} />
-          </span>
-          <span>
-            SongShift<span className="brand-cn">移调</span>
-          </span>
+          <BrandMark />
+          SongShift
         </Link>
-        <div className="workspace-label">YOUR MUSIC, EVERYWHERE</div>
-        <nav aria-label="主要导航">
-          <button
-            className="nav-item active"
-            onClick={() => {
-              setMobileNav(false);
-              document
-                .getElementById("transfer")
-                ?.scrollIntoView({ behavior: "smooth" });
-            }}
-          >
-            <AudioLines size={19} />
-            歌单迁移
-            <ArrowUpRight size={15} />
+        <nav className="topnav" aria-label="主要导航">
+          <button className="nav-item" onClick={() => setModal("history")}>
+            <History size={16} />
+            <span>后台任务</span>
           </button>
-          <button
-            className="nav-item"
-            onClick={() => {
-              setModal("history");
-              setMobileNav(false);
-            }}
-          >
-            <History size={19} />
-            后台任务
+          <button className="nav-item" onClick={() => setModal("settings")}>
+            <SlidersHorizontal size={16} />
+            <span>连接与设置</span>
           </button>
-          <button
-            className="nav-item"
-            onClick={() => {
-              setModal("settings");
-              setMobileNav(false);
-            }}
-          >
-            <SlidersHorizontal size={19} />
-            连接与设置
+          <button className="nav-item" onClick={() => setModal("help")}>
+            <CircleHelp size={16} />
+            <span>使用指南</span>
           </button>
         </nav>
-        <div className="sidebar-note">
-          <span className="mini-disc">
-            <Disc3 size={30} />
-          </span>
-          <p>
-            平台会变，
-            <br />
-            喜欢的音乐不会。
-          </p>
-          <span>Keep your music close.</span>
-          <div className="note-lines">
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-          </div>
-        </div>
-        <div className="sidebar-bottom">
-          <button className="nav-item" onClick={() => setModal("help")}>
-            <CircleHelp size={18} />
-            使用指南
-            <ArrowUpRight size={14} />
-          </button>
-          <div className="local-status">
-            <span />
-            你的音乐，由你做主 <span className="version">v1.0</span>
-          </div>
-        </div>
-      </aside>
-
+        <button
+          className="account-button"
+          onClick={() => setModal("account")}
+        >
+          <LockKeyhole size={14} />
+          <span>{user ? user.username : "登录 / 注册"}</span>
+        </button>
+      </header>
       <div className="main-shell">
-        <header className="topbar">
-          <div className="breadcrumb">
-            <button
-              className="icon-button mobile-menu"
-              aria-label="打开导航"
-              onClick={() => setMobileNav(!mobileNav)}
-            >
-              <Menu size={20} />
-            </button>
-            <span>工作台</span>
-            <span className="breadcrumb-slash">/</span>
-            <strong>歌单迁移</strong>
-          </div>
-          <div className="topbar-right">
-            <button
-              className="account-button"
-              onClick={() => setModal("account")}
-            >
-              <LockKeyhole size={14} />
-              {user ? user.username : "登录 / 注册"}
-            </button>
-            <span className="private-label">
-              <ShieldCheck size={14} />
-              安全连接，安心迁移
-            </span>
-            <button
-              className="help-button"
-              aria-label="使用帮助"
-              onClick={() => setModal("help")}
-            >
-              <CircleHelp size={19} />
-            </button>
-          </div>
-        </header>
         <main id="transfer">
-          <section className="hero">
-            <div className="hero-copy">
-              <div className="eyebrow">
-                <span /> A NEW HOME FOR YOUR MUSIC
-              </div>
-              <h1>
-                换个地方，
-                <br />
-                继续<span>喜欢。</span>
-                <svg
-                  className="title-swoosh"
-                  viewBox="0 0 150 13"
-                  aria-hidden="true"
-                >
-                  <path d="M3 9C47 1 105 1 146 6" />
-                </svg>
-              </h1>
-              <p>
-                网易云 / QQ 音乐 / 酷狗 → Spotify。
-                <br />
-                熟悉的旋律，换个地方继续。
-              </p>
-              <div className="hero-tags">
-                <span>
-                  <Check size={13} />
-                  保留歌曲顺序
-                </span>
-                <span>
-                  <Check size={13} />
-                  逐首智能匹配
-                </span>
-                <span>
-                  <Check size={13} />
-                  自主确认版本
-                </span>
-              </div>
-            </div>
-            <div className="hero-art" aria-hidden="true">
-              <div className="art-orbit orbit-one" />
-              <div className="art-orbit orbit-two" />
-              <div className="art-star star-one">✳</div>
-              <div className="art-star star-two">✦</div>
-              <div className="record-sleeve">
-                <span>
-                  GOOD MUSIC
-                  <br />
-                  GOES WITH YOU.
-                </span>
-                <div className="sleeve-landscape">
-                  <i />
-                  <b />
-                </div>
-                <span className="sleeve-bottom">SIDE A — YOUR FAVORITES</span>
-              </div>
-              <div className="vinyl">
-                <div className="vinyl-label">
-                  <AudioLines size={28} />
-                  <span>keep it playing</span>
-                  <i />
-                </div>
-              </div>
-              <div
-                className={`floating-service netease-float ${provider}-float`}
-              >
-                {provider === "netease" ? <NeteaseMark /> : <Music2 />}
-              </div>
-              <div className="floating-service spotify-float">
-                <SpotifyMark />
-              </div>
-              <div className="art-caption">
-                <span>{inputSourceName}</span>
-                <span className="art-arrow">
-                  · · · <ArrowRight size={17} /> · · ·
-                </span>
-                <span>Spotify</span>
-              </div>
-            </div>
+          <section className="intro">
+            <h1>把歌单搬到 Spotify</h1>
+            <p>
+              支持网易云音乐、QQ 音乐和酷狗的公开歌单。逐首匹配，由你确认版本，再写入你的
+              Spotify 账号。原歌单不会被改动。
+            </p>
           </section>
 
           <ol className="steps" aria-label="迁移步骤">
-            {["选择歌单", "匹配与确认", "迁移到 Spotify"].map((label, i) => {
+            {["选择歌单", "匹配与确认", "写入 Spotify"].map((label, i) => {
               const activeStep = result
                 ? 3
                 : completed === matches.length && matches.length > 0
@@ -1104,12 +937,12 @@ export default function TransferApp() {
                   className={
                     i < activeStep ? "done" : i === activeStep ? "current" : ""
                   }
+                  aria-current={i === activeStep ? "step" : undefined}
                 >
                   <span className="step-number">
-                    {i < activeStep ? <Check size={14} /> : `0${i + 1}`}
+                    {i < activeStep ? <Check size={12} strokeWidth={3} /> : i + 1}
                   </span>
                   <span>{label}</span>
-                  {i < 2 && <div className="step-line" />}
                 </li>
               );
             })}
@@ -1134,9 +967,9 @@ export default function TransferApp() {
 
           <section className="connection-grid" aria-label="选择来源和目标">
             <div className="service-card source-card">
-              <div className="card-topline">
-                <span className="section-kicker">FROM / 音乐来源</span>
-                <span className="soft-badge">公开歌单 · 免登录</span>
+              <div className="card-head">
+                <h2>从哪里迁移</h2>
+                <span className="soft-badge">公开歌单，无需登录</span>
               </div>
               <div
                 className="source-selector"
@@ -1158,18 +991,8 @@ export default function TransferApp() {
                   </button>
                 ))}
               </div>
-              <div className="service-title">
-                <span className={`service-logo ${provider}`}>
-                  {provider === "netease" ? <NeteaseMark /> : <Music2 size={28} />}
-                </span>
-                <div>
-                  <h2>{inputSourceName}</h2>
-                  <p>那些陪伴你的旋律</p>
-                </div>
-                <span className="service-index">01</span>
-              </div>
               <label htmlFor="playlist-input" className="field-label">
-                粘贴歌单链接或 ID
+                {inputSourceName}歌单链接或 ID
               </label>
               <form
                 className="input-with-button"
@@ -1178,7 +1001,7 @@ export default function TransferApp() {
                   void readPlaylist();
                 }}
               >
-                <Link2 size={17} />
+                <Link2 size={16} aria-hidden="true" />
                 <input
                   id="playlist-input"
                   placeholder={
@@ -1211,8 +1034,9 @@ export default function TransferApp() {
                 </button>
               </form>
               <div className="source-hint">
-                <span>{inputSourceName} → 歌单 → 分享 → 复制链接</span>
+                <span>在{inputSourceName}打开歌单，点「分享」并复制链接</span>
                 <button
+                  className="text-button"
                   onClick={() => {
                     setInput(
                       provider === "qq"
@@ -1224,17 +1048,16 @@ export default function TransferApp() {
                   }}
                   disabled={!!busy}
                 >
-                  {provider === "netease" ? "填入你的歌单" : "填入公开歌单"}
-                  <ArrowUpRight size={12} />
+                  {provider === "netease" ? "填入你的歌单" : "填入一个公开歌单"}
                 </button>
               </div>
             </div>
-            <div className="connection-arrow">
-              <ArrowRight size={19} />
+            <div className="connection-arrow" aria-hidden="true">
+              <ArrowRight size={18} />
             </div>
             <div className="service-card destination-card">
-              <div className="card-topline">
-                <span className="section-kicker">TO / 新的目的地</span>
+              <div className="card-head">
+                <h2>迁移到</h2>
                 <span
                   className={`connection-status ${auth.connected ? "connected" : ""}`}
                 >
@@ -1247,10 +1070,9 @@ export default function TransferApp() {
                   <SpotifyMark />
                 </span>
                 <div>
-                  <h2>Spotify</h2>
-                  <p>让喜欢，在这里继续</p>
+                  <h3>Spotify</h3>
+                  <p>新建一张歌单，写入你选中的歌曲</p>
                 </div>
-                <span className="service-index">02</span>
               </div>
               <button
                 className={`spotify-connect ${auth.connected ? "is-connected" : ""}`}
@@ -1259,58 +1081,50 @@ export default function TransferApp() {
                 }
                 disabled={!authReady || !!busy}
               >
-                {auth.connected ? <CheckCircle2 size={17} /> : <SpotifyMark />}
+                {auth.connected ? <CheckCircle2 size={16} /> : <SpotifyMark />}
                 {!authReady
                   ? "正在检查连接…"
                   : auth.connected
                     ? "Spotify 已连接"
                     : "连接 Spotify 账号"}
-                <ArrowUpRight size={16} />
               </button>
               <p className="connect-note">
                 <LockKeyhole size={12} />
-                通过 Spotify 官方授权，无需提供密码
+                在 Spotify 官方页面授权，不需要提供密码
               </p>
             </div>
           </section>
 
           {!playlist ? (
             <section className="empty-panel">
-              <div className="empty-panel-illustration">
-                <span />
-                <div>
-                  <ListMusic size={27} />
-                </div>
-                <i>
-                  <Plus size={12} />
-                </i>
+              <div className="empty-copy">
+                <h2>还没有读取歌单</h2>
+                <p>
+                  粘贴链接并读取后，这里会逐行列出每首歌和它在 Spotify
+                  上的匹配结果。
+                </p>
+                <button
+                  className="secondary-button"
+                  onClick={openDemo}
+                  disabled={!!busy}
+                >
+                  用示例歌单试试
+                </button>
               </div>
-              <h2>你的下一段音乐旅程，从这里开始</h2>
-              <p>在上方粘贴歌单链接，我们会帮你找到每首歌的新位置。</p>
-              <button
-                className="demo-button"
-                onClick={openDemo}
-                disabled={!!busy}
-              >
-                先用示例歌单体验一下
-                <ArrowRight size={15} />
-              </button>
-              <div className="empty-panel-footer">
-                <span>
-                  <FileMusic size={14} />
-                  仅迁移歌曲信息
-                </span>
-                <i />
-                <span>
-                  <ShieldCheck size={14} />
-                  不修改原始歌单
-                </span>
-                <i />
-                <span>
-                  <ArrowDownToLine size={14} />
-                  支持导出匹配报告
-                </span>
-              </div>
+              <ul className="empty-facts">
+                <li>
+                  <FileMusic size={15} />
+                  只读取歌名、歌手、专辑和时长，不涉及音频
+                </li>
+                <li>
+                  <ShieldCheck size={15} />
+                  不会修改来源平台的原歌单
+                </li>
+                <li>
+                  <ArrowDownToLine size={15} />
+                  匹配结果可导出为 CSV
+                </li>
+              </ul>
             </section>
           ) : (
             <>
@@ -1319,22 +1133,21 @@ export default function TransferApp() {
                   <Cover name={playlist.name} url={playlist.cover} large />
                   <div className="playlist-meta">
                     <div className="playlist-eyebrow">
-                      {demo ? "示例歌单 · 演示模式" : `已读取${sourceName}歌单`}
-                      <span>PLAYLIST</span>
+                      {demo ? "示例歌单（演示模式，不会写入 Spotify）" : `来自${sourceName}`}
                     </div>
                     <h2>{playlist.name}</h2>
                     <p>
-                      {playlist.creator}
-                      <span>·</span>
-                      {playlist.songs.length.toLocaleString()} 首歌曲
-                      <span>·</span>
-                      {Math.round(
-                        playlist.songs.reduce(
-                          (sum, song) => sum + song.durationMs,
-                          0,
-                        ) / 60000,
-                      )}{" "}
-                      分钟
+                      <span>{playlist.creator}</span>
+                      <span>{playlist.songs.length.toLocaleString()} 首</span>
+                      <span>
+                        {Math.round(
+                          playlist.songs.reduce(
+                            (sum, song) => sum + song.durationMs,
+                            0,
+                          ) / 60000,
+                        )}{" "}
+                        分钟
+                      </span>
                     </p>
                   </div>
                   <button
@@ -1342,7 +1155,6 @@ export default function TransferApp() {
                     onClick={reset}
                     disabled={!!busy}
                   >
-                    <Plus size={15} />
                     更换歌单
                   </button>
                 </div>
@@ -1368,17 +1180,17 @@ export default function TransferApp() {
                       ].includes(queue.task.status)
                         ? taskLabels[queue.task.status]
                         : busy === "match"
-                          ? "正在寻找熟悉的旋律…"
+                          ? "正在匹配…"
                           : completed === matches.length && matches.length
-                            ? "匹配完成，每一首都由你决定"
+                            ? "匹配完成，请检查结果"
                             : completed
-                              ? "进度已保存，随时继续"
-                              : "准备好，为歌单找一个新家"}
+                              ? "进度已保存，可以随时继续"
+                              : "还没有开始匹配"}
                     </h3>
                     <p>
                       {completed
                         ? `已处理 ${completed} / ${matches.length} 首 · 已选择 ${selected.length} 首迁移`
-                        : "综合歌名、歌手、专辑与时长，寻找合适的版本。"}
+                        : "按歌名、歌手、专辑和时长在 Spotify 上逐首查找。"}
                     </p>
                   </div>
                   {busy === "match" ||
@@ -1402,7 +1214,6 @@ export default function TransferApp() {
                         disabled={!!busy || writeStarted || queue.pending}
                         onClick={matchPlaylist}
                       >
-                        <Sparkles size={15} />
                         {queue.pending
                           ? "正在保存任务…"
                           : completed
@@ -1789,7 +1600,7 @@ export default function TransferApp() {
                               />
                             </td>
                             <td className="track-index">
-                              {String(index + 1).padStart(2, "0")}
+                              {index + 1}
                             </td>
                             <td>
                               <div className="track-info">
@@ -1833,8 +1644,8 @@ export default function TransferApp() {
                               ) : (
                                 <span className="no-match">
                                   {match.status === "pending"
-                                    ? "等待寻找它的新位置"
-                                    : "暂时没有找到合适的版本"}
+                                    ? "等待匹配"
+                                    : "没有找到合适的版本"}
                                 </span>
                               )}
                             </td>
@@ -1939,15 +1750,15 @@ export default function TransferApp() {
                   <div>
                     <h2>
                       {demo
-                        ? "体验完成，下一站换上你的歌单"
+                        ? "演示完成"
                         : result.complete
-                          ? "迁移完成，喜欢的音乐已经到站"
+                          ? "迁移完成"
                           : "歌单已创建，部分歌曲尚未确认写入"}
                     </h2>
                     <p>
                       {demo
-                        ? `示例中已选择 ${result.added} 首歌曲，没有向 Spotify 写入任何内容。`
-                        : `已确认写入 ${result.added} / ${result.total} 首歌曲。${result.complete ? "去 Spotify 开启新的循环吧。" : "请先检查目标歌单，再处理剩余歌曲。"}`}
+                        ? `示例中选择了 ${result.added} 首歌曲，没有向 Spotify 写入任何内容。现在可以换成你自己的歌单。`
+                        : `已确认写入 ${result.added} / ${result.total} 首歌曲。${result.complete ? "" : "请先在 Spotify 检查目标歌单，再处理剩余歌曲。"}`}
                     </p>
                   </div>
                   {result.url ? (
@@ -2010,7 +1821,7 @@ export default function TransferApp() {
                     )}{" "}
                     {busy === "transfer"
                       ? "正在提交后台任务…"
-                      : `${demo ? "体验迁移" : "迁移到 Spotify"}${selected.length ? ` · ${selected.length} 首` : ""}`}
+                      : `${demo ? "演示迁移" : "迁移到 Spotify"}${selected.length ? `（${selected.length} 首）` : ""}`}
                   </button>
                   {!demo && auth.connected && auth.writeReady === false && (
                     <p className="write-warning">后台写入需要读取歌单以核对进度。请重新授权一次，已有任务会保留。
@@ -2037,13 +1848,8 @@ export default function TransferApp() {
           )}
 
           <footer className="page-footer">
-            <span>
-              <AudioLines size={14} />
-              让音乐自由流动，让喜欢始终相随。
-            </span>
-            <button onClick={() => setModal("help")}>
+            <button className="text-button" onClick={() => setModal("help")}>
               关于匹配与隐私
-              <ArrowUpRight size={12} />
             </button>
           </footer>
         </main>
@@ -2174,10 +1980,10 @@ export default function TransferApp() {
         </Modal>
       )}
       {modal === "help" && (
-        <Modal title="带着喜欢的音乐出发" onClose={() => setModal(null)}>
+        <Modal title="使用指南" onClose={() => setModal(null)}>
           <div className="help-steps">
             <div>
-              <span>01</span>
+              <span>1</span>
               <section>
                 <h3>复制网易云、QQ 音乐或酷狗公开歌单链接</h3>
                 <p>
@@ -2187,7 +1993,7 @@ export default function TransferApp() {
               </section>
             </div>
             <div>
-              <span>02</span>
+              <span>2</span>
               <section>
                 <h3>连接 Spotify，逐首匹配</h3>
                 <p>
@@ -2197,7 +2003,7 @@ export default function TransferApp() {
               </section>
             </div>
             <div>
-              <span>03</span>
+              <span>3</span>
               <section>
                 <h3>确认后，创建一张新歌单</h3>
                 <p>
@@ -2221,14 +2027,13 @@ export default function TransferApp() {
             }}
             disabled={!!busy}
           >
-            用示例歌单试试看
-            <ArrowRight size={15} />
+            用示例歌单试试
           </button>
         </Modal>
       )}
       {modal === "confirm" && (
         <Modal
-          title={demo ? "体验歌单迁移" : "准备迁移这些喜欢"}
+          title={demo ? "确认演示迁移" : "确认迁移"}
           onClose={() => setModal(null)}
         >
           <div className="confirm-art">
@@ -2388,14 +2193,14 @@ export default function TransferApp() {
           ) : (
             <div className="session-summary">
               <Headphones size={35} />
-              <h3>还没有开始的旅程</h3>
+              <h3>还没有读取歌单</h3>
               <p>读取第一张歌单后，可以在这里查看进度。</p>
             </div>
           )}
         </Modal>
       )}
       {review && (
-        <Modal title="选择合适的歌曲版本" onClose={() => setReviewId(null)}>
+        <Modal title="选择歌曲版本" onClose={() => setReviewId(null)}>
           <div className="review-source">
             <span>{sourceName}原曲</span>
             <h3>{review.source.name}</h3>
