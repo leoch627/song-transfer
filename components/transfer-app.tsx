@@ -54,7 +54,6 @@ import {
 import type {
   PlaylistProvider,
   AiReview,
-  AiReviewResponse,
   AiStatus,
   AuthStatus,
   Candidate,
@@ -622,16 +621,8 @@ export default function TransferApp() {
       for (let index = 0; index < matches.length; index++) {
         if (stop.current) break;
         if (matches[index].status !== "pending") continue;
-        let match: Match;
-        if (demo) {
-          await new Promise((resolve) => setTimeout(resolve, 240));
-          match = demoMatch(matches[index].source, index);
-        } else
-          match = await api<Match>(
-            "/api/spotify/match",
-            { song: matches[index].source },
-            controller.current.signal,
-          );
+        await new Promise((resolve) => setTimeout(resolve, 240));
+        const match = demoMatch(matches[index].source, index);
         if (stop.current) break;
         setMatches((old) =>
           old.map((item, i) =>
@@ -715,52 +706,26 @@ export default function TransferApp() {
     });
     const batchController = controller.current;
     try {
-      if (!demo && taskId) await queue.save();
       const done = await runConcurrentBatch(
         items,
         async (match) => {
-          let advice: AiReview;
-          let candidates: Candidate[] | undefined;
-          let excludedCandidates: Candidate[] | undefined;
-          if (demo) {
-            await new Promise((resolve) => setTimeout(resolve, 650));
-            advice = {
-              decision: match.selected?.confident ? "match" : "skip",
-              candidateId: match.selected?.confident ? match.selected.id : null,
-              confidence: "high",
-              reason: match.selected?.confident
-                ? "示例建议：歌名、歌手和时长一致，可保留此候选。"
-                : "示例建议：候选标注 Live，且比原曲长 28 秒，可能是不同的现场录音。建议跳过，或人工确认后再选择。",
-              model: `${ai.model} · 模拟结果`,
-            };
-          } else {
-            const response = await api<AiReviewResponse>(
-              "/api/ai/review",
-              {
-                source: match.source,
-                candidates: match.candidates,
-                taskId,
-                webSearch,
-              },
-              batchController.signal,
-            );
-            ({ candidates, excludedCandidates, ...advice } = response);
-          }
+          await new Promise((resolve) => setTimeout(resolve, 650));
+          const advice: AiReview = {
+            decision: match.selected?.confident ? "match" : "skip",
+            candidateId: match.selected?.confident ? match.selected.id : null,
+            confidence: "high",
+            reason: match.selected?.confident
+              ? "示例建议：歌名、歌手和时长一致，可保留此候选。"
+              : "示例建议：候选标注 Live，且比原曲长 28 秒，可能是不同的现场录音。建议跳过，或人工确认后再选择。",
+            model: `${ai.model} · 模拟结果`,
+          };
           // A requested pause drains in-flight results instead of dropping them.
           if (batchController.signal.aborted)
             throw new Error("复核已中止，服务器已完成的结果仍会保留。");
           setMatches((old) =>
             old.map((m) =>
               m.source.id === match.source.id
-                ? applyAiReview(
-                    {
-                      ...m,
-                      candidates: candidates || m.candidates,
-                      excludedCandidates:
-                        excludedCandidates || m.excludedCandidates,
-                    },
-                    advice,
-                  )
+                ? applyAiReview(m, advice)
                 : m,
             ),
           );
