@@ -1,4 +1,4 @@
-export const DEFAULT_AI_CONCURRENCY = 3;
+const DEFAULT_AI_CONCURRENCY = 3;
 
 export function boundedConcurrency(value: unknown): number {
   const number = Number(value);

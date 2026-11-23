@@ -6,7 +6,7 @@ export const providerNames: Record<PlaylistProvider, string> = {
   kugou: "酷狗音乐",
 };
 
-export function playlistShareUrl(input: string): URL | null {
+function playlistShareUrl(input: string): URL | null {
   const embedded = input.trim().match(/https?:\/\/[^\s「」<>"“”]+/i)?.[0];
   if (!embedded) return null;
   try {

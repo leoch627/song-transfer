@@ -26,16 +26,16 @@ export function normalizeUsername(value: unknown) {
     throw new AppError("用户名需为 3～32 个文字、数字、下划线或短横线。");
   return name;
 }
-export function validatePassword(value: unknown): asserts value is string {
+function validatePassword(value: unknown): asserts value is string {
   if (typeof value !== "string" || value.length < 8 || value.length > 128)
     throw new AppError("密码需为 8～128 个字符。");
 }
-export async function hashPassword(password: string) {
+async function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
   const key = await derive(password, salt);
   return `scrypt$${salt}$${key.toString("hex")}`;
 }
-export async function verifyPassword(password: string, hash: string) {
+async function verifyPassword(password: string, hash: string) {
   const [algorithm, salt, encoded] = hash.split("$");
   if (
     algorithm !== "scrypt" ||

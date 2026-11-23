@@ -3,7 +3,7 @@ import { appUrl } from "./http";
 import { newWebSession, sessionHash, sessionUser, type User } from "./accounts";
 import { taskStore } from "./task-store";
 
-export const WEB_COOKIE = "songshift_account";
+const WEB_COOKIE = "songshift_account";
 export async function currentUser() {
   return sessionUser((await cookies()).get(WEB_COOKIE)?.value);
 }
