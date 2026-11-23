@@ -4,7 +4,7 @@ import { validateReview } from "./ai";
 import { safeSourceUrl } from "./ai-research";
 import type { Candidate, Match, Playlist, Song } from "./types";
 
-export function validSong(value: unknown): value is Song {
+function validSong(value: unknown): value is Song {
   if (!value || typeof value !== "object") return false;
   const s = value as Song;
   return (

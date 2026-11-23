@@ -4,7 +4,7 @@ import { AppError } from "./http";
 import type { TaskStore } from "./task-store";
 import type { TransferJobSummary } from "./task-types";
 
-export type TransferState = {
+type TransferState = {
   name: string;
   isPublic: boolean;
   uris: string[];

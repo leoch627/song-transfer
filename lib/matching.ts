@@ -77,7 +77,7 @@ function versions(name: string) {
     .join("|");
 }
 
-export function isLive(song: Song) {
+function isLive(song: Song) {
   return versions(`${song.name} ${song.album}`).split("|").includes("live");
 }
 

@@ -10,7 +10,7 @@ import type { AiSearchCheckpoint, AiReviewResponse, ArtistResearch, Candidate, S
 const MAX_SEARCHES = 6;
 // Cover the original-artist query even when the model sees an old rejected pool.
 // Credits such as '(feat. ELYSA)' must not hide the plain title in Spotify.
-export function originalQueries(source: Song, research?: ArtistResearch) {
+function originalQueries(source: Song, research?: ArtistResearch) {
   const title = (value: string) => value.normalize("NFKC")
     .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
     .replace(/\s+(?:feat\.?|ft\.?)\s+.*$/i, "")

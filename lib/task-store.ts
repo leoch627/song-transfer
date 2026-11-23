@@ -32,7 +32,7 @@ type Row = {
   lease_until: number;
 };
 export type ClaimedTask = { id: string; owner: string; lease: string };
-export const songKey = (song: Song) =>
+const songKey = (song: Song) =>
   createHash("sha256")
     .update(
       JSON.stringify([song.name, song.artists, song.album, song.durationMs]),

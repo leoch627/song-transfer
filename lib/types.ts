@@ -49,7 +49,7 @@ export type AiReview = {
   searchWarning?: string;
   spotifySearches?: SpotifySearchRecord[];
 };
-export type SpotifySearchRecord = {
+type SpotifySearchRecord = {
   query: string;
   reason: string;
   candidateIds: string[];
